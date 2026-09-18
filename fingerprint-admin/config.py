@@ -5,6 +5,8 @@ Enthaelt Pfade, UART-Einstellungen und die Verwaltung des Sensor-Passworts
 
 import json
 import os
+import importlib.util
+from pathlib import Path
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "sensor_config.json")
@@ -18,6 +20,9 @@ MIN_TEMPLATE_ID = 0
 MAX_TEMPLATE_ID = 199
 
 _DEFAULT_CONFIG = {"password": 0}
+
+# Gemeinsam mit dem Supervisor genutzte Fingerprint-Zuordnung
+FINGERPRINT_MAPPING_FILE = Path.home() / ".kuechendisplay" / "fingerprint_mapping.py"
 
 
 def _load_config():
@@ -52,4 +57,18 @@ def set_sensor_password(new_password: int) -> None:
     _save_config(data)
 
 
+def load_fingerprint_mapping():
+    if not FINGERPRINT_MAPPING_FILE.exists():
+        raise FileNotFoundError(
+            f"{FINGERPRINT_MAPPING_FILE} fehlt - example-config/fingerprint_mapping.py.example "
+            "nach ~/.kuechendisplay/fingerprint_mapping.py kopieren und Zuordnung eintragen"
+        )
+    spec = importlib.util.spec_from_file_location("fingerprint_mapping", FINGERPRINT_MAPPING_FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 os.makedirs(BACKUP_DIR, exist_ok=True)
+
+FINGERPRINT_MAPPING = load_fingerprint_mapping()

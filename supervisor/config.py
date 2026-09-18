@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import importlib.util
 from pathlib import Path
 
 log = logging.getLogger("supervisor.config")
@@ -64,6 +65,7 @@ AUTOIDENTIFY_SEARCH_ERROR_RETRIES = 3
 # --- Dateipfade ---
 SECRETS_FILE = Path.home() / ".kuechendisplay" / "secrets.json"
 BUTTON_MAP_CACHE_FILE = Path.home() / ".kuechendisplay" / "button_map.json"
+FINGERPRINT_MAPPING_FILE = Path.home() / ".kuechendisplay" / "fingerprint_mapping.py"
 
 
 def load_secrets() -> dict:
@@ -91,3 +93,22 @@ INDIVIDUAL_USER_CREDENTIALS = {
     "person_c": (SECRETS.get("person_c_username"), SECRETS.get("person_c_password")),
     "person_d": (SECRETS.get("person_d_username"), SECRETS.get("person_d_password")),
 }
+
+
+# --- Fingerprint-Mapping (gemeinsam mit fingerprint-admin/config.py genutzt) ---
+
+def load_fingerprint_mapping():
+    if not FINGERPRINT_MAPPING_FILE.exists():
+        log.error(
+            "Fingerprint-Mapping-Datei %s fehlt - example-config/fingerprint_mapping.py.example "
+            "nach ~/.kuechendisplay/fingerprint_mapping.py kopieren und Zuordnung eintragen",
+            FINGERPRINT_MAPPING_FILE,
+        )
+        raise FileNotFoundError(FINGERPRINT_MAPPING_FILE)
+    spec = importlib.util.spec_from_file_location("fingerprint_mapping", FINGERPRINT_MAPPING_FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+FINGERPRINT_MAPPING = load_fingerprint_mapping()

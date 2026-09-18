@@ -14,7 +14,6 @@ import threading
 import backup_store
 import config
 import supervisor_control
-from fingerprint_mapping import get_user_for_id
 from logging_setup import get_logger
 from sensor_core import FingerprintSensor, SensorError
 
@@ -233,7 +232,7 @@ class FingerprintApp(tk.Tk):
         for row in self.tree.get_children():
             self.tree.delete(row)
         for template_id in sorted(ids):
-            name = get_user_for_id(template_id) or ""
+            name = config.FINGERPRINT_MAPPING.get_user_for_id(template_id) or ""
             self.tree.insert("", "end", values=(template_id, name))
 
     def _on_select_row(self, _event):
@@ -248,7 +247,7 @@ class FingerprintApp(tk.Tk):
         if not raw.isdigit():
             self.owner_var.set("")
             return
-        owner = get_user_for_id(int(raw))
+        owner = config.FINGERPRINT_MAPPING.get_user_for_id(int(raw))
         self.owner_var.set(f"Zugeordnet: {owner}" if owner else "Keinem Namen zugeordnet.")
 
     def _read_template_id(self):
@@ -273,7 +272,7 @@ class FingerprintApp(tk.Tk):
         overwrite = False
         try:
             if self.sensor.is_occupied(template_id):
-                owner = get_user_for_id(template_id) or "unbenannt"
+                owner = config.FINGERPRINT_MAPPING.get_user_for_id(template_id) or "unbenannt"
                 overwrite = messagebox.askyesno(
                     "ID bereits belegt",
                     f"ID {template_id} ist bereits belegt (Zuordnung: {owner}).\n"
@@ -304,7 +303,7 @@ class FingerprintApp(tk.Tk):
         template_id = self._read_template_id()
         if template_id is None:
             return
-        owner = get_user_for_id(template_id) or "unbenannt"
+        owner = config.FINGERPRINT_MAPPING.get_user_for_id(template_id) or "unbenannt"
         if not messagebox.askyesno("Loeschen bestaetigen", f"Template ID {template_id} ({owner}) wirklich loeschen?"):
             return
         try:
@@ -325,7 +324,7 @@ class FingerprintApp(tk.Tk):
                 if result is None:
                     self.msg_queue.put(("done", "Kein passender Finger in der Datenbank gefunden."))
                 else:
-                    owner = get_user_for_id(result["id"]) or "kein Name zugeordnet"
+                    owner = config.FINGERPRINT_MAPPING.get_user_for_id(result["id"]) or "kein Name zugeordnet"
                     self.msg_queue.put((
                         "done",
                         f"Finger erkannt! ID {result['id']} -> {owner} (Score {result['confidence']})."

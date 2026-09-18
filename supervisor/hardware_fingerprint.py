@@ -5,7 +5,7 @@ Ablauf pro Erkennung:
   WAKEUP faellt (Finger aufgelegt)
     -> Verbindung oeffnen, verify_password()
     -> auto_identify()
-    -> Template-ID -> Name (fingerprint_mapping)
+    -> Template-ID -> Name (config.FINGERPRINT_MAPPING)
     -> Person mit hinterlegten individuellen Zugangsdaten -> individueller Login
     -> sonst (kein Match oder fehlende Zugangsdaten) -> Familie
     -> Verbindung schliessen
@@ -33,8 +33,8 @@ from config import (
     AUTOIDENTIFY_RETURN_KEY_STEPS,
     AUTOIDENTIFY_SEARCH_ERROR_RETRIES,
     INDIVIDUAL_USER_CREDENTIALS,
+    FINGERPRINT_MAPPING,
 )
-from fingerprint_mapping import get_user_for_id
 
 log = logging.getLogger("supervisor.hardware_fingerprint")
 
@@ -150,7 +150,7 @@ class FingerprintController:
                 return
 
             template_id = result["template_id"]
-            name = get_user_for_id(template_id)
+            name = FINGERPRINT_MAPPING.get_user_for_id(template_id)
             log.info("Finger erkannt: Template-ID %s -> %s (Score %s)", template_id, name, result["score"])
             self.on_identified(name)
         finally:
