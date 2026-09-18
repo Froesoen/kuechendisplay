@@ -1,0 +1,45 @@
+"""
+Fingerprint-ID-Zuordnung fuer Kuechendisplay mit Familienplaner
+BEISPIEL/VORLAGE - vor Verwendung nach ~/.kuechendisplay/fingerprint_mapping.py
+kopieren und mit echten Namen/Template-ID-Bereichen befuellen.
+
+Ordnet Template-IDs des GROW R503 Fingerabdrucksensors (Kapazitaet: 200,
+IDs 0-199) einzelnen Familienmitgliedern zu. Jedem Nutzer sind bewusst
+10 IDs reserviert (fuer mehrere Finger pro Person, z.B. linker/rechter
+Zeigefinger), auch wenn aktuell nur eine ID pro Person genutzt wird.
+Die restlichen IDs sind fuer spaetere Erweiterungen frei.
+
+Diese Datei wird sowohl vom Supervisor (supervisor/hardware_fingerprint.py)
+als auch von der Fingerabdruck-Verwaltung (fingerprint-admin/gui_app.py)
+zur Laufzeit aus ~/.kuechendisplay/fingerprint_mapping.py geladen.
+"""
+
+FINGER_MAP = {
+    "Person1": range(0, 10),
+    "Person2": range(10, 20),
+    "Person3": range(20, 30),
+    "Person4": range(30, 40),
+}
+
+
+def get_user_for_id(template_id: int):
+    """Liefert den Nutzernamen zu einer Template-ID oder None, falls nicht zugeordnet."""
+    for name, id_range in FINGER_MAP.items():
+        if template_id in id_range:
+            return name
+    return None
+
+
+def get_ids_for_user(name: str):
+    """Liefert den ID-Bereich (range) fuer einen Nutzernamen oder None."""
+    return FINGER_MAP.get(name)
+
+
+def all_users():
+    """Liefert die Liste aller bekannten Nutzernamen."""
+    return list(FINGER_MAP.keys())
+
+
+if __name__ == "__main__":
+    for name, id_range in FINGER_MAP.items():
+        print(f"{name}: IDs {id_range.start}-{id_range.stop - 1}")
