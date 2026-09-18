@@ -1,0 +1,23 @@
+# sudoers-Vorlage fuer die Fingerabdruck-Verwaltung
+#
+# Erlaubt dem angegebenen Benutzer GENAU die zwei Befehle zum Stoppen und
+# Starten von kuechendisplay-supervisor.service ohne Passwortabfrage
+# auszufuehren - nicht mehr. 'systemctl status'/'is-active' ist bewusst
+# NICHT enthalten, da diese Befehle rein lesend sind und kein sudo
+# benoetigen.
+#
+# WICHTIG: <DEIN_BENUTZERNAME> durch den tatsaechlichen Linux-Benutzernamen
+# ersetzen, bevor diese Datei installiert wird.
+#
+# Installation (auf dem Raspberry Pi):
+#
+#   sudo visudo -cf sudoers_kuechendisplay_fingerprint.txt   # nur Syntaxpruefung
+#   sudo cp sudoers_kuechendisplay_fingerprint.txt /etc/sudoers.d/kuechendisplay-fingerprint
+#   sudo chmod 440 /etc/sudoers.d/kuechendisplay-fingerprint
+#   sudo visudo -c                                           # Gesamtpruefung aller sudoers-Dateien
+#
+# WICHTIG: Absoluten Pfad zu systemctl vorher pruefen (meist /usr/bin/systemctl):
+#   which systemctl
+
+<DEIN_BENUTZERNAME> ALL=(root) NOPASSWD: /usr/bin/systemctl stop kuechendisplay-supervisor.service
+<DEIN_BENUTZERNAME> ALL=(root) NOPASSWD: /usr/bin/systemctl start kuechendisplay-supervisor.service
