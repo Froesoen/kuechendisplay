@@ -31,7 +31,7 @@ import paho.mqtt.client as mqtt
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("diashow")
 
-CONFIG_PATH = Path(os.environ.get("DIASHOW_CONFIG", "/opt/kuechendisplay/slideshow/config.json"))
+CONFIG_PATH = Path(os.environ.get("DIASHOW_CONFIG", "/home/christoph/kuechendisplay/slideshow/config.json"))
 
 
 def load_config() -> dict:
@@ -41,6 +41,12 @@ def load_config() -> dict:
 
 class DiashowService:
     VALID_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+    PIL_FORMATS = {
+        ".jpg": "JPEG",
+        ".jpeg": "JPEG",
+        ".png": "PNG",
+        ".webp": "WEBP",
+    }
 
     def __init__(self, config: dict):
         self.cfg = config
@@ -68,7 +74,10 @@ class DiashowService:
         self.topic_set_active = f"{prefix}/set/aktiv"
         self.topic_status = f"{prefix}/status"
 
-        self.client = mqtt.Client(client_id=config["mqtt"].get("client_id", "kuechendisplay-diashow"))
+        self.client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=config["mqtt"].get("client_id", "kuechendisplay-diashow"),
+        )
         user = config["mqtt"].get("username")
         pw = config["mqtt"].get("password")
         if user:
@@ -76,8 +85,8 @@ class DiashowService:
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
 
-    def _on_connect(self, client, userdata, flags, rc):
-        log.info("MQTT verbunden (rc=%s)", rc)
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        log.info("MQTT verbunden (reason_code=%s)", reason_code)
         client.subscribe(f"{self.topic_prefix}/set/#")
         self._publish_status()
 
@@ -129,6 +138,7 @@ class DiashowService:
 
     def ensure_scaled(self, path: Path) -> None:
         """Prueft Bildgroesse und verkleinert + ueberschreibt bei Bedarf."""
+        suffix = path.suffix.lower()
         try:
             with Image.open(path) as img:
                 img = ImageOps.exif_transpose(img)
@@ -137,11 +147,13 @@ class DiashowService:
                     return
 
                 img.thumbnail((self.target_w, self.target_h), Image.LANCZOS)
-                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp = path.with_name(f"{path.stem}.resize-tmp{path.suffix}")
                 save_kwargs = {}
-                if path.suffix.lower() in (".jpg", ".jpeg"):
+                if suffix in (".jpg", ".jpeg"):
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
                     save_kwargs = {"quality": self.jpeg_quality, "optimize": True}
-                img.save(tmp, **save_kwargs)
+                img.save(tmp, format=self.PIL_FORMATS[suffix], **save_kwargs)
                 os.replace(tmp, path)
                 log.info("Verkleinert: %s (%dx%d -> %s)", path.name, w, h, img.size)
         except Exception:
@@ -149,12 +161,16 @@ class DiashowService:
 
     def publish_current(self, path: Path) -> None:
         target = self.output_dir / "current.jpg"
-        tmp = self.output_dir / "current.jpg.tmp"
+        tmp = self.output_dir / "current.tmp.jpg"
         try:
-            shutil.copyfile(path, tmp)
+            with Image.open(path) as img:
+                img = ImageOps.exif_transpose(img)
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                img.save(tmp, format="JPEG", quality=self.jpeg_quality, optimize=True)
             os.replace(tmp, target)
         except Exception:
-            log.exception("Fehler beim Kopieren von %s", path)
+            log.exception("Fehler beim Erzeugen von %s", target)
             return
         self._publish_status()
 
