@@ -3,6 +3,10 @@
 - Lock-Bereich umfasst den GESAMTEN Logout/Login-Ablauf.
 - Automatische Wall-Mode-Steuerung: Familie -> an (ausser explizit abgewaehlt), individueller Nutzer -> aus.
 - state_store wird per on_wall_mode_change-Callback explizit mitgezogen.
+- Echte Browser-Nutzung (Klick/Touch/Tastatur/Scroll im yuvomi-Tab) wird per
+  CDP-Polling erkannt und zaehlt ebenfalls als Aktivitaet (siehe
+  kiosk_controller.KioskController.get_browser_last_activity_ms), damit der
+  Inaktivitaets-Timeout waehrend echter Bedienung nicht faelschlich ablaeuft.
 """
 
 from __future__ import annotations
@@ -14,9 +18,11 @@ from typing import Callable, Optional
 
 from config import FAMILIE_USERNAME, FAMILIE_PASSWORD, USER_INACTIVITY_TIMEOUT_SECONDS
 from yuvomi_session import YuvomiSessionManager
-from kiosk_controller import WallModeController
+from kiosk_controller import KioskController, WallModeController
 
 log = logging.getLogger("supervisor.yuvomi_users")
+
+BROWSER_ACTIVITY_POLL_INTERVAL_SECONDS = 5
 
 
 class YuvomiUserManager:
@@ -24,18 +30,27 @@ class YuvomiUserManager:
         self,
         session_manager: YuvomiSessionManager,
         wall_mode: WallModeController,
+        kiosk: Optional[KioskController] = None,
         on_wall_mode_change: Optional[Callable[[bool], None]] = None,
         on_change: Optional[Callable[[], None]] = None,
     ) -> None:
         self.session_manager = session_manager
         self.wall_mode = wall_mode
+        self.kiosk = kiosk
         self.on_wall_mode_change = on_wall_mode_change
         self.current_user = FAMILIE_USERNAME
         self.on_change = on_change
         self._last_activity = time.time()
+        self._last_seen_browser_activity_ms: Optional[int] = None
         self._lock = threading.Lock()
         self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._watchdog_thread.start()
+
+        if self.kiosk is not None:
+            self._browser_activity_thread = threading.Thread(
+                target=self._browser_activity_loop, daemon=True
+            )
+            self._browser_activity_thread.start()
 
     def _notify_change(self) -> None:
         if self.on_change:
@@ -51,6 +66,26 @@ class YuvomiUserManager:
     def on_activity(self) -> None:
         with self._lock:
             self._last_activity = time.time()
+
+    def _browser_activity_loop(self) -> None:
+        while True:
+            time.sleep(BROWSER_ACTIVITY_POLL_INTERVAL_SECONDS)
+            try:
+                current_ms = self.kiosk.get_browser_last_activity_ms()
+            except Exception:
+                log.exception("Browser-Aktivitaet konnte nicht abgefragt werden")
+                continue
+
+            if current_ms is None:
+                continue
+
+            if self._last_seen_browser_activity_ms is None:
+                self._last_seen_browser_activity_ms = current_ms
+                continue
+
+            if current_ms > self._last_seen_browser_activity_ms:
+                self._last_seen_browser_activity_ms = current_ms
+                self.on_activity()
 
     def ensure_familie_active(self, wall_mode: bool = True) -> None:
         with self._lock:

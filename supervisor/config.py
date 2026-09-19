@@ -27,7 +27,11 @@ CDP_WAIT_POLL_INTERVAL_SECONDS = 2
 YUVOMI_BASE_URL = "http://planer:3000"
 YUVOMI_REQUEST_TIMEOUT_SECONDS = 15
 YUVOMI_RETRY_DELAY_SECONDS = 3
-USER_INACTIVITY_TIMEOUT_SECONDS = 5 * 60
+# Inaktivitaets-Timeout fuer individuelle Konten (Benjamin/Miriam) - zaehlt
+# echte Browser-Nutzung (Klick/Touch/Tastatur/Scroll, siehe kiosk_controller
+# Activity-Tracker) UND MQTT-/Taster-Aktivitaet. Bewusst kurz gehalten
+# (3 Minuten), damit nach Nutzungsende zuegig auf Familie zurueckgefallen wird.
+USER_INACTIVITY_TIMEOUT_SECONDS = 3 * 60
 
 # --- Display / Zustand ---
 HEARTBEAT_INTERVAL_SECONDS = 30

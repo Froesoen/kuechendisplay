@@ -60,6 +60,7 @@ class Supervisor:
         self.yuvomi_users = YuvomiUserManager(
             self.yuvomi_session,
             self.wall_mode,
+            kiosk=self.kiosk,
             on_wall_mode_change=lambda enabled: self.state_store.update(wall_mode=enabled),
         )
 
