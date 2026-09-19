@@ -1,0 +1,14 @@
+[Unit]
+Description=Kuechendisplay Diashow Webserver
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/kuechendisplay/slideshow/www
+ExecStart=/usr/bin/python3 -m http.server 8090
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

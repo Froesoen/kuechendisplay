@@ -1,0 +1,16 @@
+{
+  "image_root": "/mnt/diashow",
+  "output_dir": "/opt/kuechendisplay/slideshow/www/img",
+  "target_width": 1920,
+  "target_height": 1080,
+  "jpeg_quality": 85,
+  "default_interval": 10,
+  "mqtt": {
+    "host": "192.168.178.10",
+    "port": 1883,
+    "username": "kuechendisplay",
+    "password": "changeme",
+    "client_id": "kuechendisplay-diashow",
+    "topic_prefix": "kuechendisplay/diashow"
+  }
+}
