@@ -25,7 +25,7 @@ import paho.mqtt.client as mqtt
 from config import (
     MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_BASE_TOPIC,
     YUVOMI_BASE_URL, DEFAULT_APP_URLS, HEARTBEAT_INTERVAL_SECONDS,
-    SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS, DISPLAY_PREFERENCES,
+    SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS, DISPLAY_PREFERENCES, DIASHOW_URL,
 )
 from state import StateStore
 from kiosk_controller import KioskController, WallModeController, apply_display_preferences
@@ -122,7 +122,10 @@ class Supervisor:
             log.error("Ungueltiger display_mode: %s", mode)
             return
         self.state_store.update(display_mode=mode)
-        if mode == "app":
+        if mode == "slideshow":
+            log.info("Wechsle zu Diashow: %s", DIASHOW_URL)
+            self.kiosk.navigate(DIASHOW_URL)
+        elif mode == "app":
             self._set_active_app(self.state_store.state.active_app)
 
     def _set_active_app(self, app: str) -> None:
