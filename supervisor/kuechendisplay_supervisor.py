@@ -62,6 +62,8 @@ class Supervisor:
             self.wall_mode,
             kiosk=self.kiosk,
             on_wall_mode_change=lambda enabled: self.state_store.update(wall_mode=enabled),
+            on_notify=lambda text: self._publish(full_topic("cmd/notify"), text, False),
+            on_notify_clear=lambda: self._publish(full_topic("cmd/notify/clear"), "", False),
         )
 
         self.button_mapper = ButtonMapper(publish_fn=self._publish)

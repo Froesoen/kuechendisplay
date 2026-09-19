@@ -7,6 +7,9 @@
   CDP-Polling erkannt und zaehlt ebenfalls als Aktivitaet (siehe
   kiosk_controller.KioskController.get_browser_last_activity_ms), damit der
   Inaktivitaets-Timeout waehrend echter Bedienung nicht faelschlich ablaeuft.
+- LOGOUT_WARNING_LEAD_SECONDS vor dem automatischen Rueckfall auf Familie wird
+  einmalig eine Bildschirm-Benachrichtigung ausgeloest (on_notify), die bei
+  erneuter Aktivitaet sofort wieder zurueckgenommen wird (on_notify_clear).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from kiosk_controller import KioskController, WallModeController
 log = logging.getLogger("supervisor.yuvomi_users")
 
 BROWSER_ACTIVITY_POLL_INTERVAL_SECONDS = 5
+LOGOUT_WARNING_LEAD_SECONDS = 10
 
 
 class YuvomiUserManager:
@@ -33,15 +37,20 @@ class YuvomiUserManager:
         kiosk: Optional[KioskController] = None,
         on_wall_mode_change: Optional[Callable[[bool], None]] = None,
         on_change: Optional[Callable[[], None]] = None,
+        on_notify: Optional[Callable[[str], None]] = None,
+        on_notify_clear: Optional[Callable[[], None]] = None,
     ) -> None:
         self.session_manager = session_manager
         self.wall_mode = wall_mode
         self.kiosk = kiosk
         self.on_wall_mode_change = on_wall_mode_change
+        self.on_notify = on_notify
+        self.on_notify_clear = on_notify_clear
         self.current_user = FAMILIE_USERNAME
         self.on_change = on_change
         self._last_activity = time.time()
         self._last_seen_browser_activity_ms: Optional[int] = None
+        self._pending_logout_warned = False
         self._lock = threading.Lock()
         self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True)
         self._watchdog_thread.start()
@@ -63,9 +72,17 @@ class YuvomiUserManager:
         else:
             self._notify_change()
 
+    def _clear_pending_logout_warning(self) -> None:
+        with self._lock:
+            was_warned = self._pending_logout_warned
+            self._pending_logout_warned = False
+        if was_warned and self.on_notify_clear:
+            self.on_notify_clear()
+
     def on_activity(self) -> None:
         with self._lock:
             self._last_activity = time.time()
+        self._clear_pending_logout_warning()
 
     def _browser_activity_loop(self) -> None:
         while True:
@@ -100,6 +117,7 @@ class YuvomiUserManager:
             self.current_user = FAMILIE_USERNAME
             self._last_activity = time.time()
 
+        self._clear_pending_logout_warning()
         self._set_wall_mode(wall_mode)
 
     def switch_user(self, username: str, password: str) -> bool:
@@ -119,6 +137,7 @@ class YuvomiUserManager:
                 log.error("Nutzerwechsel zu '%s' fehlgeschlagen", username)
 
         if ok:
+            self._clear_pending_logout_warning()
             self._set_wall_mode(False)
         else:
             self._notify_change()
@@ -138,6 +157,7 @@ class YuvomiUserManager:
             self.current_user = FAMILIE_USERNAME
             self._last_activity = time.time()
 
+        self._clear_pending_logout_warning()
         self._set_wall_mode(True)
 
     def _watchdog_loop(self) -> None:
@@ -146,5 +166,18 @@ class YuvomiUserManager:
             with self._lock:
                 is_familie = self.current_user == FAMILIE_USERNAME
                 idle_seconds = time.time() - self._last_activity
-            if not is_familie and idle_seconds >= USER_INACTIVITY_TIMEOUT_SECONDS:
+                already_warned = self._pending_logout_warned
+
+            if is_familie:
+                continue
+
+            remaining_seconds = USER_INACTIVITY_TIMEOUT_SECONDS - idle_seconds
+            if not already_warned and 0 < remaining_seconds <= LOGOUT_WARNING_LEAD_SECONDS:
+                with self._lock:
+                    self._pending_logout_warned = True
+                log.info("Inaktivitaets-Warnung: automatische Abmeldung in %ss", LOGOUT_WARNING_LEAD_SECONDS)
+                if self.on_notify:
+                    self.on_notify(f"Automatische Abmeldung in {LOGOUT_WARNING_LEAD_SECONDS}s")
+
+            if idle_seconds >= USER_INACTIVITY_TIMEOUT_SECONDS:
                 self._fallback_to_familie()
