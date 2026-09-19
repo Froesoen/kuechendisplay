@@ -47,6 +47,13 @@ DISPLAY_PREFERENCES = {
     "yuvomi-lang": "de",
 }
 
+# --- Diashow (NAS-Fotos, siehe docs/diashow.md) ---
+# Lokaler Webserver des slideshow-Moduls (slideshow/systemd/kuechendisplay-diashow-web.service).
+# Wird von _set_display_mode("slideshow") angesteuert - ausgeloest durch Button 2
+# (button_mapper: 2_short -> cmd/mode=slideshow), den Inaktivitaets-Watchdog nach
+# SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS oder ein manuelles MQTT-Kommando.
+DIASHOW_URL = "http://127.0.0.1:8090/"
+
 # --- Display-Power (wlopm) ---
 WLOPM_OUTPUT_NAME = "HDMI-A-1"  # ggf. mit 'wlopm' ohne Argumente pruefen/anpassen
 

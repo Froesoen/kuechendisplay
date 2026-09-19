@@ -1,0 +1,15 @@
+[Unit]
+Description=Kuechendisplay Diashow-Service
+After=remote-fs.target network-online.target
+Wants=remote-fs.target network-online.target
+
+[Service]
+Type=simple
+User=christoph
+Environment=DIASHOW_CONFIG=/home/christoph/kuechendisplay/slideshow/config.json
+ExecStart=/usr/bin/python3 /home/christoph/kuechendisplay/slideshow/slideshow_service.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
