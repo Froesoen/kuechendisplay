@@ -1,8 +1,10 @@
 # Secrets & lokale Konfiguration - NIEMALS committen
 .kuechendisplay/
 supervisor/secrets.json
+supervisor/fingerprint_mapping.py
 fingerprint-admin/sensor_config.json
 fingerprint-admin/sudoers_kuechendisplay_fingerprint.txt
+fingerprint-admin/fingerprint_mapping.py
 
 # Laufzeitdaten der Fingerabdruck-Verwaltung
 fingerprint-admin/backups/

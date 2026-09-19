@@ -18,6 +18,21 @@ from config import CDP_URL, CDP_WAIT_TIMEOUT_SECONDS, CDP_WAIT_POLL_INTERVAL_SEC
 
 log = logging.getLogger("supervisor.kiosk")
 
+# Wird per CDP bei jedem Seitenaufbau automatisch injiziert (ueberlebt also
+# auch Reloads durch Wall-Mode-Umschaltung), damit der Supervisor echte
+# Browser-Nutzung (nicht nur MQTT/Taster) fuer den Inaktivitaets-Timeout
+# sehen kann (siehe yuvomi_users._browser_activity_loop).
+ACTIVITY_TRACKER_SCRIPT = """
+(function() {
+  window.__kuechendisplayLastActivity = Date.now();
+  ["click", "touchstart", "keydown", "scroll", "mousemove"].forEach(function(evt) {
+    window.addEventListener(evt, function() {
+      window.__kuechendisplayLastActivity = Date.now();
+    }, {passive: true, capture: true});
+  });
+})();
+"""
+
 
 class KioskController:
     def __init__(self, cdp_url: str = CDP_URL) -> None:
@@ -59,7 +74,30 @@ class KioskController:
         self.tab.Page.enable()
         self.tab.Runtime.enable()
         self.tab.Network.enable()
+        self._install_activity_tracker()
         log.info("Kiosk-Controller an Tab %s angehaengt", self.tab.id)
+
+    def _install_activity_tracker(self) -> None:
+        try:
+            self.tab.Page.addScriptToEvaluateOnNewDocument(source=ACTIVITY_TRACKER_SCRIPT)
+            self.evaluate(ACTIVITY_TRACKER_SCRIPT)
+        except Exception:
+            log.exception("Activity-Tracker-Skript konnte nicht installiert werden")
+
+    def get_browser_last_activity_ms(self) -> Optional[int]:
+        """Liest window.__kuechendisplayLastActivity aus der aktuellen Seite.
+
+        Liefert None, wenn der Wert (noch) nicht gelesen werden kann (z. B.
+        waehrend eines Reloads) - der Aufrufer soll das dann einfach beim
+        naechsten Poll erneut versuchen.
+        """
+        try:
+            result = self.evaluate("window.__kuechendisplayLastActivity || 0")
+            value = result.get("result", {}).get("value")
+            return int(value) if value else None
+        except Exception:
+            log.debug("Browser-Aktivitaet konnte nicht gelesen werden", exc_info=True)
+            return None
 
     def navigate(self, url: str) -> None:
         log.info("Navigiere zu %s", url)
