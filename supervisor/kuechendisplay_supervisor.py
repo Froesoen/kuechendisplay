@@ -149,7 +149,8 @@ class Supervisor:
 
         target = resolve_login_target(name)
         if target is None:
-            self.yuvomi_users.ensure_familie_active()
+            self.yuvomi_users.ensure_familie_active(wall_mode=False)
+            log.info("Fingerabdruck ohne individuelles Konto (%s) - Familie aktiv, Wallmode aus", name)
         else:
             display_name, username, password = target
             self.state_store.update(active_app="yuvomi")

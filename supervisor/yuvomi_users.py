@@ -1,7 +1,7 @@
 """yuvomi_users.py - Verwaltung des aktiven Yuvomi-Nutzers.
 
 - Lock-Bereich umfasst den GESAMTEN Logout/Login-Ablauf.
-- Automatische Wall-Mode-Steuerung: Familie -> an, individueller Nutzer -> aus.
+- Automatische Wall-Mode-Steuerung: Familie -> an (ausser explizit abgewaehlt), individueller Nutzer -> aus.
 - state_store wird per on_wall_mode_change-Callback explizit mitgezogen.
 """
 
@@ -52,7 +52,7 @@ class YuvomiUserManager:
         with self._lock:
             self._last_activity = time.time()
 
-    def ensure_familie_active(self) -> None:
+    def ensure_familie_active(self, wall_mode: bool = True) -> None:
         with self._lock:
             previous_user = self.current_user
             if previous_user != FAMILIE_USERNAME:
@@ -65,7 +65,7 @@ class YuvomiUserManager:
             self.current_user = FAMILIE_USERNAME
             self._last_activity = time.time()
 
-        self._set_wall_mode(True)
+        self._set_wall_mode(wall_mode)
 
     def switch_user(self, username: str, password: str) -> bool:
         ok = False
