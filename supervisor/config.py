@@ -27,10 +27,10 @@ CDP_WAIT_POLL_INTERVAL_SECONDS = 2
 YUVOMI_BASE_URL = "http://planer:3000"
 YUVOMI_REQUEST_TIMEOUT_SECONDS = 15
 YUVOMI_RETRY_DELAY_SECONDS = 3
-# Inaktivitaets-Timeout fuer individuelle Konten (Benjamin/Miriam) - zaehlt
-# echte Browser-Nutzung (Klick/Touch/Tastatur/Scroll, siehe kiosk_controller
-# Activity-Tracker) UND MQTT-/Taster-Aktivitaet. Bewusst kurz gehalten
-# (3 Minuten), damit nach Nutzungsende zuegig auf Familie zurueckgefallen wird.
+# Inaktivitaets-Timeout fuer individuelle Konten - zaehlt echte Browser-Nutzung
+# (Klick/Touch/Tastatur/Scroll, siehe kiosk_controller Activity-Tracker) UND
+# MQTT-/Taster-Aktivitaet. Bewusst kurz gehalten (3 Minuten), damit nach
+# Nutzungsende zuegig auf Familie zurueckgefallen wird.
 USER_INACTIVITY_TIMEOUT_SECONDS = 3 * 60
 
 # --- Display / Zustand ---
@@ -93,9 +93,16 @@ SECRETS = load_secrets()
 FAMILIE_USERNAME = SECRETS.get("familie_username", "familie")
 FAMILIE_PASSWORD = SECRETS.get("familie_password", "PLATZHALTER_BITTE_SECRETS_JSON_ANLEGEN")
 
+# Individuelle Konten fuer per Fingerabdruck ausgeloeste Logins. Wird
+# vollstaendig aus secrets.json abgeleitet (Abschnitt "individual_accounts").
+# Die Namen/Schluessel entscheidet ausschliesslich die lokale secrets.json -
+# config.py enthaelt bewusst KEINE echten Namen, damit das oeffentliche
+# Repository frei von personenbezogenen Daten bleibt. Die verwendeten
+# Bezeichner muessen mit den Schluesseln in fingerprint_mapping.py
+# uebereinstimmen (siehe example-config/).
 INDIVIDUAL_USER_CREDENTIALS = {
-    "person_c": (SECRETS.get("person_c_username"), SECRETS.get("person_c_password")),
-    "person_d": (SECRETS.get("person_d_username"), SECRETS.get("person_d_password")),
+    name: (creds.get("username"), creds.get("password"))
+    for name, creds in SECRETS.get("individual_accounts", {}).items()
 }
 
 
