@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 
-from fingerprint_mapping import get_user_for_id
+from config import FINGERPRINT_MAPPING
 
 BACKUP_FORMAT_VERSION = 1
 
@@ -26,7 +26,7 @@ def build_backup(sensor, ids: list = None) -> dict:
         checksum = hashlib.sha256(raw).hexdigest()
         entries.append({
             "id": template_id,
-            "name": get_user_for_id(template_id),
+            "name": FINGERPRINT_MAPPING.get_user_for_id(template_id),
             "data_b64": base64.b64encode(raw).decode("ascii"),
             "sha256": checksum,
         })
