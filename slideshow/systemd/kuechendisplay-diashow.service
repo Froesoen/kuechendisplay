@@ -5,9 +5,9 @@ Wants=remote-fs.target network-online.target
 
 [Service]
 Type=simple
-User=pi
-Environment=DIASHOW_CONFIG=/opt/kuechendisplay/slideshow/config.json
-ExecStart=/usr/bin/python3 /opt/kuechendisplay/slideshow/slideshow_service.py
+User=christoph
+Environment=DIASHOW_CONFIG=/home/christoph/kuechendisplay/slideshow/config.json
+ExecStart=/usr/bin/python3 /home/christoph/kuechendisplay/slideshow/slideshow_service.py
 Restart=on-failure
 RestartSec=5
 

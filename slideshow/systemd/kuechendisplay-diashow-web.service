@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/opt/kuechendisplay/slideshow/www
+User=christoph
+WorkingDirectory=/home/christoph/kuechendisplay/slideshow/www
 ExecStart=/usr/bin/python3 -m http.server 8090
 Restart=on-failure
 RestartSec=5
