@@ -2,8 +2,8 @@
 state.py - Zustandsmodell des Kuechendisplays.
 
 Trennt die frueher in einem einzigen 'mode'-Feld vermischten Dimensionen
-(Anzeigezustand, App, Nutzer, Wall Mode, Display-Power) in unabhaengige,
-einzeln aenderbare Felder.
+(Anzeigezustand, App, Nutzer, Wall Mode, Display-Power, Kindersicherung) in
+unabhaengige, einzeln aenderbare Felder.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ class DisplayState:
     active_app: str = "yuvomi"    # yuvomi | nodered | custom:<url>
     active_user: str = "Familie"  # Familie | person_c | person_d
     wall_mode: bool = False
+    child_lock: bool = False      # Kindersicherung: sperrt Taster/Fingerprint/Touch
 
     def as_dict(self) -> dict:
         return {
@@ -27,6 +28,7 @@ class DisplayState:
             "active_app": self.active_app,
             "active_user": self.active_user,
             "wall_mode": self.wall_mode,
+            "child_lock": self.child_lock,
         }
 
 

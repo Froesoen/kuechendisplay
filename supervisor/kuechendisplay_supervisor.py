@@ -1,10 +1,14 @@
 """kuechendisplay_supervisor.py - Hauptorchestrator des Kuechendisplay-Supervisors (v2).
 
 Fuehrt alle Module zusammen: Kiosk/CDP, Yuvomi-Session/-User, Zustandsmodell,
-Button-Mapper, Taster- und Fingerabdruck-Hardware, Display-Praeferenzen.
+Button-Mapper, Taster- und Fingerabdruck-Hardware, Display-Praeferenzen,
+Display-Power (MOSFET-Modul an GPIO17) und Kindersicherung.
 
-Display-Power (wlopm) wird NICHT hier ausgefuehrt, sondern im separaten
-Prozess display_power_control.py.
+Display-Power wird DIREKT hier per GPIO geschaltet (kein separater Prozess
+und kein 'wlopm' mehr noetig, siehe docs/hardware.md) - das physische
+Ein-/Ausschalten der Monitor-Stromversorgung loest selbst ein
+HDMI-Hotplug-Ereignis aus, auf das der Wayland-Compositor automatisch
+reagiert.
 
 Hinweis zum Dateinamen: Diese Datei heisst bewusst identisch zur
 Vorgaengerversion (v1), weil der Dateiname im labwc-Autostart bzw. im
@@ -21,11 +25,13 @@ import threading
 import time
 
 import paho.mqtt.client as mqtt
+from gpiozero import OutputDevice
 
 from config import (
     MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_BASE_TOPIC,
     YUVOMI_BASE_URL, DEFAULT_APP_URLS, HEARTBEAT_INTERVAL_SECONDS,
     SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS, DISPLAY_PREFERENCES, DIASHOW_URL,
+    MONITOR_POWER_GPIO, CHILD_LOCK_NOTIFY_TEXT,
 )
 from state import StateStore
 from kiosk_controller import KioskController, WallModeController, apply_display_preferences
@@ -71,8 +77,16 @@ class Supervisor:
         self._shutdown_event = threading.Event()
         self._last_general_activity = time.time()
 
+        # GERUI-Dual-MOSFET-Modul: aktiv HIGH = Monitor an. initial_value=True
+        # entspricht dem Standardzustand "display_power: on" im State.
+        self._monitor_power = OutputDevice(MONITOR_POWER_GPIO, active_high=True, initial_value=True)
+
         self.hardware_buttons = HardwareButtons(on_event=self._on_button_event)
-        self.fingerprint = FingerprintController(on_identified=self._on_fingerprint_identified)
+        self.fingerprint = FingerprintController(
+            on_identified=self._on_fingerprint_identified,
+            is_child_lock_active=lambda: self.state_store.state.child_lock,
+            on_child_lock_blocked=self._on_child_lock_blocked_input,
+        )
 
         will_payload = json.dumps({"online": False, "reason": "connection_lost"})
         self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -143,10 +157,39 @@ class Supervisor:
         self.kiosk.navigate(url)
 
     def _set_display_power(self, powered_on: bool) -> None:
+        if powered_on:
+            self._monitor_power.on()
+        else:
+            self._monitor_power.off()
         self.state_store.update(display_power="on" if powered_on else "off")
+        log.info("Monitor-Stromversorgung (GPIO17) %s", "eingeschaltet" if powered_on else "ausgeschaltet")
+
+    def _publish_child_lock_status(self) -> None:
+        self._publish(
+            full_topic("status/kindersicherung"),
+            "on" if self.state_store.state.child_lock else "off",
+            True,
+        )
+
+    def _set_child_lock(self, enabled: bool, *, notify: bool = True) -> None:
+        self.state_store.update(child_lock=enabled)
+        self._publish_child_lock_status()
+        self.kiosk.set_touch_blocked(enabled)
+        if notify:
+            self._publish(full_topic("cmd/notify"), CHILD_LOCK_NOTIFY_TEXT, False)
+        log.info("Kindersicherung %s", "aktiviert" if enabled else "deaktiviert")
+
+    def _on_child_lock_blocked_input(self) -> None:
+        # Wird aufgerufen, wenn Taster oder Fingerabdrucksensor waehrend
+        # aktiver Kindersicherung bedient werden.
+        self._publish(full_topic("cmd/notify"), CHILD_LOCK_NOTIFY_TEXT, False)
 
     def _on_button_event(self, button_nr: int, press_type: str) -> None:
         self._note_activity()
+        if self.state_store.state.child_lock:
+            log.info("Taster %s (%s) waehrend aktiver Kindersicherung ignoriert", button_nr, press_type)
+            self._on_child_lock_blocked_input()
+            return
         self.button_mapper.on_button_event(button_nr, press_type)
 
     def _on_fingerprint_identified(self, name) -> None:
@@ -169,6 +212,10 @@ class Supervisor:
         self._publish_heartbeat()
         self._publish_state()
         self.button_mapper.publish_full_map()
+        # Kindersicherung startet nach jedem Neustart immer im Zustand
+        # "aus" - explizit setzen, damit ein evtl. stehen gebliebener
+        # retained Wert von vor einem Absturz/Neustart ueberschrieben wird.
+        self._set_child_lock(False, notify=False)
 
     def _on_message(self, client, userdata, msg) -> None:
         topic = msg.topic
@@ -195,6 +242,8 @@ class Supervisor:
                 enabled = payload.strip().lower() == "on"
                 self.wall_mode.set(enabled)
                 self.state_store.update(wall_mode=enabled)
+            elif sub_topic == "cmd/kindersicherung":
+                self._set_child_lock(payload.strip().lower() == "on")
             elif sub_topic == "cmd/notify":
                 log.info("Notification: %s (Anzeige uebernimmt notification_overlay.py)", payload)
             elif sub_topic == "cmd/notify/clear":

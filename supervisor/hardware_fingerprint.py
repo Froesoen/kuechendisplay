@@ -1,14 +1,24 @@
 """hardware_fingerprint.py - Fingerabdruck-Erkennung (GROW R503) via GPIO4-
-WAKEUP-Trigger und dem Rohprotokoll-Befehl AutoIdentify (0x32).
+WAKEUP-Trigger, kapazitiv geschalteter VCC (BC327-High-Side-Transistor an
+GPIO27) und dem Rohprotokoll-Befehl AutoIdentify (0x32).
 
 Ablauf pro Erkennung:
-  WAKEUP faellt (Finger aufgelegt)
+  WAKEUP faellt (Finger beruehrt den Sensor - die Touch-Power-Versorgung
+  (weisse Ader) haengt IMMER dauerhaft an 3,3V, nur die Haupt-VCC (rote
+  Ader) wird ueber den Transistor geschaltet, siehe docs/hardware.md)
+    -> Kindersicherung aktiv? -> ja: Sensor bleibt stromlos, nur Notify
+    -> Mindestabschaltzeit (FINGERPRINT_POWER_MIN_OFF_SECONDS) noch nicht
+       erreicht? -> WAKEUP wird ignoriert (Schutz lt. R503-Datenblatt)
+    -> GPIO27 auf LOW (BC327 leitet, Sensor-VCC an)
+    -> FINGERPRINT_POWER_ON_DELAY_SECONDS warten (Sensor-Bootzeit lt.
+       Datenblatt ca. 50ms)
     -> Verbindung oeffnen, verify_password()
-    -> auto_identify()
+    -> auto_identify() (Sensor bricht intern nach ca. 10s ohne Finger von
+       selbst ab, siehe R503-Datenblatt zu AutoIdentify/0x32)
     -> Template-ID -> Name (config.FINGERPRINT_MAPPING)
     -> Person mit hinterlegten individuellen Zugangsdaten -> individueller Login
     -> sonst (kein Match oder fehlende Zugangsdaten) -> Familie
-    -> Verbindung schliessen
+    -> Verbindung schliessen, GPIO27 auf HIGH (Sensor-VCC aus)
 """
 
 from __future__ import annotations
@@ -21,10 +31,13 @@ from typing import Callable, Optional
 
 import serial
 import adafruit_fingerprint
-from gpiozero import Button
+from gpiozero import Button, OutputDevice
 
 from config import (
     FINGERPRINT_WAKEUP_GPIO,
+    FINGERPRINT_POWER_GPIO,
+    FINGERPRINT_POWER_ON_DELAY_SECONDS,
+    FINGERPRINT_POWER_MIN_OFF_SECONDS,
     FINGERPRINT_UART_PORT,
     FINGERPRINT_UART_BAUDRATE,
     AUTOIDENTIFY_SECURITY_LEVEL,
@@ -105,14 +118,39 @@ def auto_identify(uart: serial.Serial, **kwargs) -> dict:
 
 
 class FingerprintController:
-    def __init__(self, on_identified: Callable[[Optional[str]], None]) -> None:
+    def __init__(
+        self,
+        on_identified: Callable[[Optional[str]], None],
+        is_child_lock_active: Callable[[], bool] = lambda: False,
+        on_child_lock_blocked: Callable[[], None] = lambda: None,
+    ) -> None:
         self.on_identified = on_identified
+        self.is_child_lock_active = is_child_lock_active
+        self.on_child_lock_blocked = on_child_lock_blocked
         self._busy = threading.Lock()
+
+        # Aktiv LOW: initial_value=False -> physisch HIGH -> BC327 gesperrt,
+        # Sensor bleibt beim Start der Software sicher stromlos.
+        self._power = OutputDevice(FINGERPRINT_POWER_GPIO, active_high=False, initial_value=False)
+        self._last_power_off_monotonic = time.monotonic() - FINGERPRINT_POWER_MIN_OFF_SECONDS
 
         self._wakeup = Button(FINGERPRINT_WAKEUP_GPIO, pull_up=True)
         self._wakeup.when_pressed = self._on_wakeup
 
     def _on_wakeup(self) -> None:
+        if self.is_child_lock_active():
+            log.info("WAKEUP waehrend aktiver Kindersicherung ignoriert - Sensor bleibt stromlos")
+            self.on_child_lock_blocked()
+            return
+
+        since_off = time.monotonic() - self._last_power_off_monotonic
+        if since_off < FINGERPRINT_POWER_MIN_OFF_SECONDS:
+            log.debug(
+                "WAKEUP ignoriert - Mindestabschaltzeit von %.1fs noch nicht erreicht (erst %.1fs vergangen)",
+                FINGERPRINT_POWER_MIN_OFF_SECONDS, since_off,
+            )
+            return
+
         if not self._busy.acquire(blocking=False):
             log.warning("Fingerabdruck-Erkennung laeuft bereits, WAKEUP ignoriert")
             return
@@ -124,12 +162,16 @@ class FingerprintController:
         except Exception:
             log.exception("Fehler bei Fingerabdruck-Erkennung")
         finally:
+            self._power.off()
+            self._last_power_off_monotonic = time.monotonic()
             self._busy.release()
 
     def _identify_once(self) -> None:
+        self._power.on()
+        time.sleep(FINGERPRINT_POWER_ON_DELAY_SECONDS)
+
         uart = serial.Serial(FINGERPRINT_UART_PORT, baudrate=FINGERPRINT_UART_BAUDRATE, timeout=2)
         try:
-            time.sleep(0.1)
             finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
             if finger.verify_password() != adafruit_fingerprint.OK:
                 log.error("Passwort-Verifikation gegen den Sensor fehlgeschlagen")

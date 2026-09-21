@@ -1,7 +1,8 @@
 """
 kiosk_controller.py - Chromium-Steuerung per Chrome DevTools Protocol (CDP),
-Wall-Mode-Steuerung. Display-Power-Steuerung erfolgt NICHT mehr hier,
-sondern im separaten Prozess display_power_control.py.
+Wall-Mode-Steuerung sowie die Touch-Sperre fuer die Kindersicherung.
+Display-Power-Steuerung erfolgt NICHT hier, sondern direkt im
+Haupt-Supervisor ueber GPIO (siehe kuechendisplay_supervisor.py).
 """
 
 from __future__ import annotations
@@ -33,12 +34,48 @@ ACTIVITY_TRACKER_SCRIPT = """
 })();
 """
 
+# Kindersicherung: transparentes Overlay ueber der gesamten Seite, das alle
+# Zeige-/Klick-Eingaben abfaengt, ohne den dargestellten Inhalt zu
+# veraendern. Wird per addScriptToEvaluateOnNewDocument registriert, damit
+# es auch Navigationen/Reloads (z. B. Wall-Mode) uebersteht.
+TOUCH_BLOCK_OVERLAY_ID = "__kuechendisplayChildLockOverlay"
+
+TOUCH_BLOCK_ENABLE_SCRIPT = """
+(function() {
+  if (document.getElementById("%(overlay_id)s")) return;
+  var overlay = document.createElement("div");
+  overlay.id = "%(overlay_id)s";
+  overlay.style.position = "fixed";
+  overlay.style.top = "0";
+  overlay.style.left = "0";
+  overlay.style.width = "100vw";
+  overlay.style.height = "100vh";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.background = "transparent";
+  overlay.style.touchAction = "none";
+  var block = function(e) { e.preventDefault(); e.stopPropagation(); };
+  ["touchstart", "touchmove", "touchend", "pointerdown", "pointermove",
+   "pointerup", "click", "mousedown", "mouseup"].forEach(function(evt) {
+    overlay.addEventListener(evt, block, {capture: true});
+  });
+  (document.body || document.documentElement).appendChild(overlay);
+})();
+""" % {"overlay_id": TOUCH_BLOCK_OVERLAY_ID}
+
+TOUCH_BLOCK_DISABLE_SCRIPT = """
+(function() {
+  var overlay = document.getElementById("%(overlay_id)s");
+  if (overlay) overlay.remove();
+})();
+""" % {"overlay_id": TOUCH_BLOCK_OVERLAY_ID}
+
 
 class KioskController:
     def __init__(self, cdp_url: str = CDP_URL) -> None:
         self.cdp_url = cdp_url
         self.browser = pychrome.Browser(url=cdp_url)
         self.tab: Optional[pychrome.Tab] = None
+        self._touch_block_script_id: Optional[str] = None
         self._wait_for_cdp_and_attach()
 
     def _wait_for_cdp_and_attach(self) -> None:
@@ -139,6 +176,35 @@ class KioskController:
 
     def reload(self) -> None:
         self.tab.Page.reload(ignoreCache=False)
+
+    def set_touch_blocked(self, blocked: bool) -> None:
+        """Aktiviert/deaktiviert die Touch-Sperre fuer die Kindersicherung.
+
+        Blendet ein transparentes Overlay ein, das alle Touch-/Maus-/Klick-
+        Ereignisse abfaengt, ohne den angezeigten Inhalt zu veraendern.
+        Registriert das Overlay-Skript zusaetzlich fuer kommende
+        Navigationen (Wall-Mode-Reload, App-/Modus-Wechsel), solange die
+        Sperre aktiv ist, und entfernt die Registrierung beim Entsperren
+        wieder.
+        """
+        try:
+            if blocked:
+                if self._touch_block_script_id is None:
+                    result = self.tab.Page.addScriptToEvaluateOnNewDocument(
+                        source=TOUCH_BLOCK_ENABLE_SCRIPT
+                    )
+                    self._touch_block_script_id = result.get("identifier")
+                self.evaluate(TOUCH_BLOCK_ENABLE_SCRIPT)
+            else:
+                if self._touch_block_script_id is not None:
+                    self.tab.Page.removeScriptToEvaluateOnNewDocument(
+                        identifier=self._touch_block_script_id
+                    )
+                    self._touch_block_script_id = None
+                self.evaluate(TOUCH_BLOCK_DISABLE_SCRIPT)
+            log.info("Touch-Sperre (Kindersicherung) %s", "aktiviert" if blocked else "deaktiviert")
+        except Exception:
+            log.exception("Touch-Sperre konnte nicht umgeschaltet werden (blocked=%s)", blocked)
 
 
 WALL_MODE_KEY = "yuvomi-wall-mode"

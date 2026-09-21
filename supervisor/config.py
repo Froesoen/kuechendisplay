@@ -54,13 +54,32 @@ DISPLAY_PREFERENCES = {
 # SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS oder ein manuelles MQTT-Kommando.
 DIASHOW_URL = "http://127.0.0.1:8090/"
 
-# --- Display-Power (wlopm) ---
-WLOPM_OUTPUT_NAME = "HDMI-A-1"  # ggf. mit 'wlopm' ohne Argumente pruefen/anpassen
+# --- Display-Power (MOSFET-Modul, siehe docs/hardware.md) ---
+# GERUI-Dual-MOSFET-Trigger-Modul (Low-Side, Logic-Level), TRIG-Eingang aktiv
+# HIGH = Monitor an. Schaltet die komplette Stromversorgung des Monitors
+# (nicht nur ein Software-Blanking wie frueher per wlopm). Wird direkt im
+# Haupt-Supervisor angesteuert, kein eigener Prozess mehr noetig.
+MONITOR_POWER_GPIO = 17
 
-# --- GPIO Pinbelegung (siehe docs/hardware.md) ---
+# --- GPIO Pinbelegung (siehe docs/hardware.md und docs/gpio-pinbelegung.md) ---
 BUTTON_GPIO_PINS = {1: 5, 2: 6, 3: 13, 4: 19}
 BUTTON_PHYSICAL_PINS = {1: 29, 2: 31, 3: 33, 4: 35}
 FINGERPRINT_WAKEUP_GPIO = 4
+
+# BC327-High-Side-Transistor an der VCC-Leitung des Fingerabdrucksensors:
+# GPIO27 aktiv LOW = Basis des BC327 wird auf Low gezogen -> Transistor
+# leitet -> Sensor-VCC an. HIGH (Ruhezustand) = Transistor gesperrt, Sensor
+# stromlos. Ein 10-kOhm-Pull-up an der Basis stellt sicher, dass der Sensor
+# auch vor dem Start der Software sicher spannungslos bleibt.
+FINGERPRINT_POWER_GPIO = 27
+# R503-Datenblatt: Power-on-Delay ca. 50ms bis der Sensor Kommandos annimmt.
+# 100ms Sicherheitsmarge, wird direkt nach dem Einschalten von VCC gewartet.
+FINGERPRINT_POWER_ON_DELAY_SECONDS = 0.1
+# R503-Datenblatt: nach dem Abschalten muss die Stromversorgung mindestens
+# 2 Sekunden aus bleiben, bevor sie wieder eingeschaltet werden darf.
+# 2,5s als Sicherheitsmarge.
+FINGERPRINT_POWER_MIN_OFF_SECONDS = 2.5
+
 LONG_PRESS_THRESHOLD_SECONDS = 1.0
 
 # --- Fingerabdrucksensor (GROW R503) ---
@@ -72,6 +91,12 @@ AUTOIDENTIFY_START_POS = 0
 AUTOIDENTIFY_END_POS = 200
 AUTOIDENTIFY_RETURN_KEY_STEPS = 1
 AUTOIDENTIFY_SEARCH_ERROR_RETRIES = 3
+
+# --- Kindersicherung ---
+# Sperrt Taster, Fingerabdrucksensor (bleibt stromlos) und Touch-Eingaben im
+# Kiosk-Browser (Overlay). Startet nach jedem Neustart des Supervisors immer
+# im Zustand "aus" (keine Persistenz), siehe docs/mqtt.md.
+CHILD_LOCK_NOTIFY_TEXT = "Kindersicherung"
 
 # --- Dateipfade ---
 SECRETS_FILE = Path.home() / ".kuechendisplay" / "secrets.json"
