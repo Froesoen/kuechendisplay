@@ -2,13 +2,18 @@
 
 Fuehrt alle Module zusammen: Kiosk/CDP, Yuvomi-Session/-User, Zustandsmodell,
 Button-Mapper, Taster- und Fingerabdruck-Hardware, Display-Praeferenzen,
-Display-Power (MOSFET-Modul an GPIO17) und Kindersicherung.
+Display-Power (Relais-Modul an GPIO17, physischer Pin 11) und Kindersicherung.
 
 Display-Power wird DIREKT hier per GPIO geschaltet (kein separater Prozess
 und kein 'wlopm' mehr noetig, siehe docs/hardware.md) - das physische
 Ein-/Ausschalten der Monitor-Stromversorgung loest selbst ein
 HDMI-Hotplug-Ereignis aus, auf das der Wayland-Compositor automatisch
 reagiert.
+
+Relais-Verdrahtung: Trigger-Jumper auf High-Level, Monitor-Plus ueber COM/NC.
+Ruhezustand (Relais abgefallen, GPIO nicht angesteuert, z. B. waehrend des
+Bootens) = NC geschlossen = Monitor an. GPIO17 HIGH = Relais zieht an = NC
+offen = Monitor aus.
 
 Hinweis zum Dateinamen: Diese Datei heisst bewusst identisch zur
 Vorgaengerversion (v1), weil der Dateiname im labwc-Autostart bzw. im
@@ -77,9 +82,13 @@ class Supervisor:
         self._shutdown_event = threading.Event()
         self._last_general_activity = time.time()
 
-        # GERUI-Dual-MOSFET-Modul: aktiv HIGH = Monitor an. initial_value=True
-        # entspricht dem Standardzustand "display_power: on" im State.
-        self._monitor_power = OutputDevice(MONITOR_POWER_GPIO, active_high=True, initial_value=True)
+        # Relais-Modul (High-Level-Trigger) mit Monitor-Plus ueber COM/NC:
+        # active_high=False kehrt die Logik um, damit on()/off() dem Monitor-
+        # zustand entsprechen: on() = GPIO LOW = Relais abgefallen = NC
+        # geschlossen = Monitor an; off() = GPIO HIGH = Relais angezogen =
+        # NC offen = Monitor aus. initial_value=True (Monitor an) entspricht
+        # dem Standardzustand "display_power: on" im State.
+        self._monitor_power = OutputDevice(MONITOR_POWER_GPIO, active_high=False, initial_value=True)
 
         self.hardware_buttons = HardwareButtons(on_event=self._on_button_event)
         self.fingerprint = FingerprintController(
@@ -162,7 +171,7 @@ class Supervisor:
         else:
             self._monitor_power.off()
         self.state_store.update(display_power="on" if powered_on else "off")
-        log.info("Monitor-Stromversorgung (GPIO17) %s", "eingeschaltet" if powered_on else "ausgeschaltet")
+        log.info("Monitor-Stromversorgung (Relais, GPIO17) %s", "eingeschaltet" if powered_on else "ausgeschaltet")
 
     def _publish_child_lock_status(self) -> None:
         self._publish(
