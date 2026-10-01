@@ -54,11 +54,14 @@ DISPLAY_PREFERENCES = {
 # SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS oder ein manuelles MQTT-Kommando.
 DIASHOW_URL = "http://127.0.0.1:8090/"
 
-# --- Display-Power (MOSFET-Modul, siehe docs/hardware.md) ---
-# GERUI-Dual-MOSFET-Trigger-Modul (Low-Side, Logic-Level), TRIG-Eingang aktiv
-# HIGH = Monitor an. Schaltet die komplette Stromversorgung des Monitors
-# (nicht nur ein Software-Blanking wie frueher per wlopm). Wird direkt im
-# Haupt-Supervisor angesteuert, kein eigener Prozess mehr noetig.
+# --- Display-Power (Relais-Modul, siehe docs/hardware.md) ---
+# Relais-Modul mit Optokoppler, Trigger-Jumper auf High-Level. Trigger-Eingang
+# an GPIO17 (physischer Pin 11). Monitor-Plus laeuft ueber COM/NC: Im Ruhezustand
+# (Relais abgefallen, z. B. waehrend des Bootens) ist der Monitor an. GPIO17 HIGH
+# zieht das Relais an und schaltet den Monitor aus. Die Invertierung erfolgt im
+# Supervisor (OutputDevice active_high=False). Schaltet die komplette
+# Stromversorgung des Monitors (nicht nur ein Software-Blanking wie frueher per
+# wlopm). Wird direkt im Haupt-Supervisor angesteuert, kein eigener Prozess noetig.
 MONITOR_POWER_GPIO = 17
 
 # --- GPIO Pinbelegung (siehe docs/hardware.md und docs/gpio-pinbelegung.md) ---
