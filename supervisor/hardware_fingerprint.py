@@ -19,6 +19,11 @@ Ablauf pro Erkennung:
     -> Person mit hinterlegten individuellen Zugangsdaten -> individueller Login
     -> sonst (kein Match oder fehlende Zugangsdaten) -> Familie
     -> Verbindung schliessen, GPIO27 auf HIGH (Sensor-VCC aus)
+
+Fehler (Sensor antwortet nicht, Passwort-Pruefung schlaegt fehl) werden
+zusaetzlich ueber den Callback on_error gemeldet; der Supervisor leitet sie
+in den MQTT-Notify-Kanal (cmd/notify). Wiederholte Fehler werden durch
+ERROR_NOTIFY_COOLDOWN_SECONDS gedrosselt.
 """
 
 from __future__ import annotations
@@ -54,6 +59,9 @@ log = logging.getLogger("supervisor.hardware_fingerprint")
 HEADER = b"\xEF\x01"
 DEFAULT_ADDRESS = b"\xFF\xFF\xFF\xFF"
 PROTOCOL_READ_TIMEOUT_SECONDS = 12.0
+# Mindestabstand zwischen zwei Fehler-Meldungen (on_error), damit wiederholte
+# Beruehrungen bei defektem Sensor das Notify-Overlay nicht dauerhaft fluten.
+ERROR_NOTIFY_COOLDOWN_SECONDS = 60.0
 
 
 def _checksum(pid: int, length_bytes: bytes, content: bytes) -> int:
@@ -123,10 +131,13 @@ class FingerprintController:
         on_identified: Callable[[Optional[str]], None],
         is_child_lock_active: Callable[[], bool] = lambda: False,
         on_child_lock_blocked: Callable[[], None] = lambda: None,
+        on_error: Callable[[str], None] = lambda text: None,
     ) -> None:
         self.on_identified = on_identified
         self.is_child_lock_active = is_child_lock_active
         self.on_child_lock_blocked = on_child_lock_blocked
+        self.on_error = on_error
+        self._last_error_notify_monotonic: Optional[float] = None
         self._busy = threading.Lock()
 
         # Aktiv LOW: initial_value=False -> physisch HIGH -> BC327 gesperrt,
@@ -156,11 +167,29 @@ class FingerprintController:
             return
         threading.Thread(target=self._run_identification, daemon=True).start()
 
+    def _report_error(self, text: str) -> None:
+        now = time.monotonic()
+        last = self._last_error_notify_monotonic
+        if last is not None and now - last < ERROR_NOTIFY_COOLDOWN_SECONDS:
+            return
+        self._last_error_notify_monotonic = now
+        try:
+            self.on_error(text)
+        except Exception:
+            log.exception("on_error-Callback fehlgeschlagen")
+
+    @staticmethod
+    def _describe_error(exc: Exception) -> str:
+        if isinstance(exc, (TimeoutError, RuntimeError, serial.SerialException)):
+            return "Fingerabdrucksensor: keine Antwort - Verkabelung pruefen"
+        return "Fingerabdrucksensor: Fehler bei der Erkennung"
+
     def _run_identification(self) -> None:
         try:
             self._identify_once()
-        except Exception:
+        except Exception as exc:
             log.exception("Fehler bei Fingerabdruck-Erkennung")
+            self._report_error(self._describe_error(exc))
         finally:
             self._power.off()
             self._last_power_off_monotonic = time.monotonic()
@@ -175,6 +204,7 @@ class FingerprintController:
             finger = adafruit_fingerprint.Adafruit_Fingerprint(uart)
             if finger.verify_password() != adafruit_fingerprint.OK:
                 log.error("Passwort-Verifikation gegen den Sensor fehlgeschlagen")
+                self._report_error("Fingerabdrucksensor: Passwort-Pruefung fehlgeschlagen")
                 return
 
             result = auto_identify(

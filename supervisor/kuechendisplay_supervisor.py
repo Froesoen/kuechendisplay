@@ -95,6 +95,7 @@ class Supervisor:
             on_identified=self._on_fingerprint_identified,
             is_child_lock_active=lambda: self.state_store.state.child_lock,
             on_child_lock_blocked=self._on_child_lock_blocked_input,
+            on_error=self._on_fingerprint_error,
         )
 
         will_payload = json.dumps({"online": False, "reason": "connection_lost"})
@@ -192,6 +193,10 @@ class Supervisor:
         # Wird aufgerufen, wenn Taster oder Fingerabdrucksensor waehrend
         # aktiver Kindersicherung bedient werden.
         self._publish(full_topic("cmd/notify"), CHILD_LOCK_NOTIFY_TEXT, False)
+
+    def _on_fingerprint_error(self, text: str) -> None:
+        # Sensor-/UART-Fehler (keine Antwort, Passwort-Pruefung) als Notify anzeigen.
+        self._publish(full_topic("cmd/notify"), text, False)
 
     def _on_button_event(self, button_nr: int, press_type: str) -> None:
         self._note_activity()
