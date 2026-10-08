@@ -13,14 +13,30 @@
 # 'systemctl stop/start kuechendisplay-supervisor.service', siehe
 # sudoers_kuechendisplay_fingerprint.txt.example.
 #
+# Sensor-Versorgung (Kuechendisplay): Die Haupt-VCC des R503 wird ueber einen
+# BC327-Transistor geschaltet (GPIO27, aktiv LOW) und vom Supervisor nur bei
+# Beruehrung eingeschaltet. Da der Supervisor hier gestoppt ist, schaltet
+# dieses Skript die Versorgung waehrend der gesamten GUI-Nutzung dauerhaft ein
+# (per 'pinctrl') und danach wieder aus. Die Python-GUI selbst bleibt davon
+# unberuehrt und kann auch mit anderen R503-Aufbauten genutzt werden.
+#
 # Aufruf:
 #   bash start_fingerprint_gui.sh
+#   SENSOR_POWER_GPIO=none bash start_fingerprint_gui.sh   # Sensor dauerhaft versorgt
 
 set -uo pipefail
 
 VENV_DIR="$HOME/kuechendisplay-venv"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 SERVICE_NAME="kuechendisplay-supervisor.service"
+
+# GPIO-Nummer (BCM) des BC327-Schalters; "none" = Versorgung nicht schalten.
+SENSOR_POWER_GPIO="${SENSOR_POWER_GPIO:-27}"
+# R503-Datenblatt: ca. 50 ms bis zur Kommandobereitschaft, 0,5 s als Marge.
+SENSOR_POWER_ON_DELAY_SECONDS="${SENSOR_POWER_ON_DELAY_SECONDS:-0.5}"
+# R503-Datenblatt: nach dem Abschalten mind. 2 s aus, 2,5 s als Marge.
+SENSOR_POWER_MIN_OFF_SECONDS="${SENSOR_POWER_MIN_OFF_SECONDS:-2.5}"
+SENSOR_POWER_IS_ON=0
 
 if [ ! -f "$VENV_DIR/bin/activate" ]; then
     echo "FEHLER: venv nicht gefunden unter $VENV_DIR" >&2
@@ -41,6 +57,35 @@ restart_supervisor() {
     fi
 }
 
+sensor_power_on() {
+    [ "$SENSOR_POWER_GPIO" = "none" ] && return 0
+    if ! command -v pinctrl >/dev/null 2>&1; then
+        echo "WARNUNG: 'pinctrl' nicht gefunden - Sensor-Versorgung (GPIO$SENSOR_POWER_GPIO) wird nicht geschaltet." >&2
+        return 0
+    fi
+    echo "Schalte Sensor-Versorgung ein (GPIO$SENSOR_POWER_GPIO = LOW)..."
+    if pinctrl set "$SENSOR_POWER_GPIO" op dl; then
+        SENSOR_POWER_IS_ON=1
+        sleep "$SENSOR_POWER_ON_DELAY_SECONDS"
+    else
+        echo "WARNUNG: GPIO$SENSOR_POWER_GPIO konnte nicht gesetzt werden - Sensor evtl. stromlos." >&2
+    fi
+}
+
+sensor_power_off() {
+    [ "$SENSOR_POWER_IS_ON" = "1" ] || return 0
+    echo "Schalte Sensor-Versorgung aus (GPIO$SENSOR_POWER_GPIO = HIGH)..."
+    pinctrl set "$SENSOR_POWER_GPIO" op dh
+    SENSOR_POWER_IS_ON=0
+    # Mindestpause, bevor der Supervisor den Sensor ggf. wieder einschaltet.
+    sleep "$SENSOR_POWER_MIN_OFF_SECONDS"
+}
+
+cleanup() {
+    sensor_power_off
+    restart_supervisor
+}
+
 echo "Stoppe $SERVICE_NAME vor Sensorzugriff..."
 if ! sudo -n systemctl stop "$SERVICE_NAME"; then
     echo "FEHLER: $SERVICE_NAME konnte nicht gestoppt werden (sudoers-Freigabe fehlt?)." >&2
@@ -48,7 +93,9 @@ if ! sudo -n systemctl stop "$SERVICE_NAME"; then
     exit 1
 fi
 
-trap restart_supervisor EXIT
+trap cleanup EXIT
+
+sensor_power_on
 
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
