@@ -19,8 +19,8 @@ chmod 600 ~/.kuechendisplay/secrets.json ~/.kuechendisplay/fingerprint_mapping.p
 
 Anschliessend beide Dateien mit echten Werten befuellen:
 
-- `secrets.json`: echte Zugangsdaten fuer familie/benjamin/miriam eintragen.
-- `fingerprint_mapping.py`: echte Namen und Template-ID-Bereiche eintragen.
+- `secrets.json`: echte Zugangsdaten fuer das Familien-Konto (`familie_username`/`familie_password`) und die individuellen Konten (`individual_accounts`) eintragen.
+- `fingerprint_mapping.py`: echte Namen und Template-ID-Bereiche eintragen. Die Bezeichner muessen mit den Schluesseln unter `individual_accounts` in `secrets.json` uebereinstimmen.
 
 `button_map.json` muss NICHT manuell angelegt werden - der Supervisor erzeugt
 die Datei beim ersten Start automatisch mit `{}` als Inhalt.

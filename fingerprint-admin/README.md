@@ -23,7 +23,7 @@ werden kann, unabhaengig vom Kuechendisplay-Supervisor.
 | `main.py` | Einstiegspunkt (`python3 main.py`) |
 | `fingerprint_mapping.py` | Namenszuordnung (eigene Kopie, siehe Hinweis oben) |
 | `supervisor_control.py` | Stoppt/startet `kuechendisplay-supervisor.service` waehrend Sensorzugriff |
-| `start_fingerprint_gui.sh` | Start-Skript inkl. Supervisor-Stop/-Restart |
+| `start_fingerprint_gui.sh` | Start-Skript inkl. Supervisor-Stop/-Restart und optionaler Sensor-Stromversorgung (GPIO27 per `pinctrl`) |
 
 ## Installation
 
@@ -34,7 +34,9 @@ pip install pyserial adafruit-circuitpython-fingerprint
 sudo apt install python3-tk   # falls tkinter fehlt
 ```
 
-Verkabelung siehe `../docs/hardware.md` (TXD->RXD Pin 10/GPIO15, RXD<-TXD Pin 8/GPIO14, VCC Pin 1, GND Pin 6).
+Verkabelung im Kuechendisplay siehe `../docs/hardware.md` und `../docs/gpio-pinbelegung.md` (Sensor-TXD -> Pi RXD Pin 10/GPIO15, Pi TXD Pin 8/GPIO14 -> Sensor-RXD, VCC ueber BC327 an GPIO27/Pin 13, Touch-Power Pin 17, GND Masseklemme).
+
+Bei einem anderen Aufbau reicht es, den Sensor per UART an `/dev/serial0` (57600 Baud) mit Strom zu versorgen; die GUI selbst benoetigt weder GPIO noch MQTT.
 
 ## Ersteinrichtung
 
@@ -55,6 +57,20 @@ bash start_fingerprint_gui.sh
 Das Skript stoppt vor dem Sensorzugriff automatisch `kuechendisplay-supervisor.service`
 (Konflikt um `/dev/serial0`) und startet ihn beim Beenden zuverlaessig wieder - auch bei
 Absturz oder Strg+C.
+
+**Sensor-Stromversorgung (Kuechendisplay):** Der R503 wird dort ueber einen BC327 an
+GPIO27 (aktiv LOW) nur bei Beruehrung vom Supervisor versorgt. Da der Supervisor waehrend
+der GUI-Nutzung gestoppt ist, schaltet das Skript GPIO27 per `pinctrl` fuer die gesamte
+Dauer der GUI auf Low (Sensor dauerhaft an) und danach wieder auf High; vor dem
+Supervisor-Neustart wartet es 2,5 s (Mindestpause laut Datenblatt). Die Python-GUI bleibt
+davon unberuehrt.
+
+```bash
+SENSOR_POWER_GPIO=none bash start_fingerprint_gui.sh   # Sensor dauerhaft versorgt / anderer Aufbau
+SENSOR_POWER_GPIO=27 bash start_fingerprint_gui.sh     # Standard (Kuechendisplay)
+```
+
+Ein direkter Start per `python3 main.py` funktioniert nur, wenn der Sensor ohnehin Strom hat und kein anderer Prozess `/dev/serial0` belegt.
 
 ## Bugfix: belegte ID beschreiben
 

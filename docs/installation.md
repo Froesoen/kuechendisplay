@@ -53,12 +53,18 @@ zusaetzlicher Dienst und kein `wlopm` noetig.
 
 ## 5. Zusatzprozess in ~/.config/labwc/autostart
 
-- `notification_overlay.py` (Notification-Overlay, braucht `LD_PRELOAD` fuer `libgtk4-layer-shell.so.0`, siehe Kommentar im Dateikopf)
+- `notification_overlay.py` (Notification-Overlay). Es benoetigt `gir1.2-gtk4layershell-1.0` (GTK4, nicht `gir1.2-gtklayershell-0.1`), `paho-mqtt` und laeuft mit System-Python (nicht der venv). Start mit `LD_PRELOAD` fuer `libgtk4-layer-shell.so.0`:
+
+```bash
+LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgtk4-layer-shell.so.0 python3 ~/kuechendisplay/supervisor/notification_overlay.py
+```
 
 Das Overlay zeigt auch die Fehlermeldungen des Supervisors an (siehe
-[`docs/mqtt.md`](mqtt.md)). Die Display-Power-Steuerung (frueher per `wlopm`
-in `display_power_control.py`) ist Teil des Supervisors und muss hier nicht
-mehr separat gestartet werden.
+[`docs/mqtt.md`](mqtt.md)). Meldungen bleiben stehen (`NOTIFY_DISPLAY_SECONDS`
+ist `None`), bis sie angetippt oder per `cmd/notify/clear` (Standard: Taster 4
+kurz) ausgeblendet werden. Die Display-Power-Steuerung (frueher per `wlopm` in
+`display_power_control.py`) ist Teil des Supervisors und muss hier nicht mehr
+separat gestartet werden.
 
 Siehe [`docs/kiosk-labwc.md`](kiosk-labwc.md) fuer die vollstaendige autostart-Konfiguration.
 
