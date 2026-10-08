@@ -57,6 +57,19 @@ def full_topic(sub_topic: str) -> str:
     return MQTT_BASE_TOPIC + sub_topic
 
 
+def parse_json_bool(payload: str) -> bool | None:
+    """Liest einen MQTT-Payload als JSON-Boolean.
+
+    Akzeptiert ausschliesslich die JSON-Literale true und false. Alles andere
+    (on/off, "true", 1, leere oder ungueltige Payloads) ergibt None.
+    """
+    try:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return value if isinstance(value, bool) else None
+
+
 class Supervisor:
     def __init__(self) -> None:
         self.kiosk = KioskController()
@@ -115,6 +128,7 @@ class Supervisor:
 
     def _publish_state(self) -> None:
         state = self.state_store.state.as_dict()
+        state["display_power"] = state["display_power"] == "on"
         state["active_user"] = self.yuvomi_users.current_user
         self._publish(full_topic("status/state"), json.dumps(state), True)
         log.info("status/state aktualisiert: %s", state)
@@ -177,7 +191,7 @@ class Supervisor:
     def _publish_child_lock_status(self) -> None:
         self._publish(
             full_topic("status/kindersicherung"),
-            "on" if self.state_store.state.child_lock else "off",
+            json.dumps(self.state_store.state.child_lock),
             True,
         )
 
@@ -247,17 +261,27 @@ class Supervisor:
             elif sub_topic == "cmd/app":
                 self._set_active_app(payload)
             elif sub_topic == "cmd/display/power":
-                normalized = payload.strip().lower()
-                if normalized == "toggle":
+                if payload.strip().lower() == "toggle":
                     self._set_display_power(self.state_store.state.display_power != "on")
                 else:
-                    self._set_display_power(normalized == "on")
+                    powered_on = parse_json_bool(payload)
+                    if powered_on is None:
+                        log.warning("%s erwartet true, false oder toggle; empfangen: %r", sub_topic, payload)
+                    else:
+                        self._set_display_power(powered_on)
             elif sub_topic == "cmd/wallmode":
-                enabled = payload.strip().lower() == "on"
-                self.wall_mode.set(enabled)
-                self.state_store.update(wall_mode=enabled)
+                enabled = parse_json_bool(payload)
+                if enabled is None:
+                    log.warning("%s erwartet true oder false; empfangen: %r", sub_topic, payload)
+                else:
+                    self.wall_mode.set(enabled)
+                    self.state_store.update(wall_mode=enabled)
             elif sub_topic == "cmd/kindersicherung":
-                self._set_child_lock(payload.strip().lower() == "on")
+                enabled = parse_json_bool(payload)
+                if enabled is None:
+                    log.warning("%s erwartet true oder false; empfangen: %r", sub_topic, payload)
+                else:
+                    self._set_child_lock(enabled)
             elif sub_topic == "cmd/notify":
                 log.info("Notification: %s (Anzeige uebernimmt notification_overlay.py)", payload)
             elif sub_topic == "cmd/notify/clear":
