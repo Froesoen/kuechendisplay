@@ -26,7 +26,7 @@ Verbindungsaufbau `display/kueche/cmd/#`.
 |---|---|---|
 | `display/kueche/cmd/mode` | `app` oder `slideshow` | Wechselt den Anzeigemodus. Bei `slideshow` wird der Kiosk-Tab zu `DIASHOW_URL` (`http://127.0.0.1:8090/`) navigiert; bei `app` wird die aktuell aktive App erneut aktiviert. |
 | `display/kueche/cmd/app` | `yuvomi`, `nodered` oder `custom:<url>` | Setzt die aktive App und `display_mode=app`. Bei `yuvomi` wird zusaetzlich der Familien-Login sichergestellt. `custom:` erlaubt eine beliebige URL, z. B. `custom:http://example.local/`. |
-| `display/kueche/cmd/display/power` | `on`, `off` oder `toggle` | Schaltet die Monitor-Stromversorgung direkt per GPIO17 (GERUI-MOSFET-Modul) - kein `wlopm` und kein separater Prozess mehr noetig, da die Stromtrennung selbst ein HDMI-Hotplug-Ereignis ausloest, auf das der Wayland-Compositor automatisch reagiert. |
+| `display/kueche/cmd/display/power` | `on`, `off` oder `toggle` | Schaltet die Monitor-Stromversorgung ueber das Relais-Modul an GPIO17 (Pin 11). `off` = Relais zieht an, Monitor stromlos; `on` = Relais faellt ab, Monitor hat Strom. Kein `wlopm` und kein separater Prozess noetig; die Stromtrennung loest selbst ein HDMI-Hotplug-Ereignis aus. |
 | `display/kueche/cmd/wallmode` | `on` (alles andere = aus) | Aktiviert/deaktiviert den Wall Mode (setzt/loescht `localStorage`-Key `yuvomi-wall-mode` im Kiosk-Browser und laedt neu). |
 | `display/kueche/cmd/kindersicherung` | `on` (alles andere = aus) | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` bleibt auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `off` (keine Persistenz). Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
 | `display/kueche/cmd/notify` | beliebiger Text | Zeigt den Text im Notification-Overlay an (eigener Prozess `notification_overlay.py`, abonniert denselben Topic direkt; der Supervisor selbst loggt die Nachricht nur). |
@@ -49,7 +49,7 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/app' -m nodered
 # Beliebige eigene URL anzeigen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/app' -m 'custom:http://example.local/'
 
-# Display aus- bzw. umschalten (schaltet jetzt die echte Stromversorgung)
+# Monitor-Strom aus- bzw. umschalten (schaltet das Relais)
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m off
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m toggle
 
@@ -71,6 +71,22 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
 # Testweise als individueller Nutzer anmelden
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/user' -m 'kind1:geheimespasswort'
 ```
+
+## Supervisor: Fehlermeldungen des Fingerabdrucksensors (`cmd/notify`)
+
+Fehler bei der Fingerabdruck-Erkennung veroeffentlicht der Supervisor selbst
+auf `display/kueche/cmd/notify`; das Notification-Overlay zeigt sie an. Pro
+Minute wird hoechstens eine solche Meldung gesendet
+(`ERROR_NOTIFY_COOLDOWN_SECONDS` in `supervisor/hardware_fingerprint.py`).
+
+| Text | Bedeutung |
+|---|---|
+| `Fingerabdrucksensor: keine Antwort - Verkabelung pruefen` | Timeout/Lesefehler (Datenleitungen, Sensorversorgung) |
+| `Fingerabdrucksensor: Passwort-Pruefung fehlgeschlagen` | Sensor antwortet, Passwort stimmt nicht |
+| `Fingerabdrucksensor: Fehler bei der Erkennung` | sonstiger Fehler, Details im Journal |
+
+Das Fingerabdruck-Admin-Tool (`fingerprint-admin/`) sendet bewusst keine
+MQTT-Meldungen und bleibt eigenstaendig nutzbar.
 
 ## Supervisor: Status (Ausgang, retained)
 
@@ -154,9 +170,9 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -m app
 
 ---
 
-*Quelle: Code-Stand vom 21.09.2026 (`supervisor/kuechendisplay_supervisor.py`,
+*Quelle: Code-Stand vom 08.10.2026 (`supervisor/kuechendisplay_supervisor.py`,
 `config.py`, `state.py`, `button_mapper.py`, `hardware_buttons.py`,
 `hardware_fingerprint.py`, `kiosk_controller.py`, `notification_overlay.py`,
 `slideshow/slideshow_service.py`, `docs/diashow.md`, `docs/hardware.md`).
-Display-Power und Kindersicherung laufen seit diesem Stand direkt im
-Haupt-Supervisor, `display_power_control.py` wurde entfernt.*
+Display-Power (Relais an GPIO17), Kindersicherung und die Fehlermeldungen des
+Fingerabdrucksensors laufen direkt im Haupt-Supervisor.*
