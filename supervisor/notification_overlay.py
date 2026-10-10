@@ -9,10 +9,17 @@ WICHTIG:
         python3 ~/kuechendisplay/supervisor/notification_overlay.py
 - Laeuft mit System-Python (nicht der venv).
 - Gestartet ueber ~/.config/labwc/autostart.
+
+Markdown: Der Payload von cmd/notify wird als Markdown-Teilmenge interpretiert
+und in Pango-Markup umgewandelt (Ueberschriften H1-H3, fett, kursiv,
+durchgestrichen, Inline-Code, Codebloecke, Listen, Zitate, Trennlinien).
+Links werden nur unterstrichen dargestellt; Tabellen/Bilder sind nicht
+unterstuetzt. Bei ungueltigem Markup wird der Rohtext angezeigt.
 """
 
 from __future__ import annotations
 
+import re
 import socket
 import time
 
@@ -21,7 +28,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 
-from gi.repository import Gtk, GLib, Gtk4LayerShell as LayerShell  # noqa: E402
+from gi.repository import Gtk, GLib, Pango, Gtk4LayerShell as LayerShell  # noqa: E402
 import paho.mqtt.client as mqtt  # noqa: E402
 
 MQTT_BROKER_HOST = "mqtt"
@@ -40,12 +47,66 @@ CSS_TEMPLATE = """
     font-size: 32px;
     border-radius: 12px;
     min-width: {width}px;
+    line-height: 1.3;
+}}
+.notification-label tt {{
+    font-family: monospace;
 }}
 """
+
+_HEADING_SIZES = {1: "xx-large", 2: "x-large", 3: "large"}
 
 
 def full_topic(sub_topic: str) -> str:
     return MQTT_BASE_TOPIC + sub_topic
+
+
+def _esc(text: str) -> str:
+    return GLib.markup_escape_text(text)
+
+
+def _inline_md(text: str) -> str:
+    parts = re.split(r"(`[^`]+`)", text)
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            out.append(f"<tt>{_esc(part[1:-1])}</tt>")
+            continue
+        t = _esc(part)
+        t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"<u>\1</u>", t)
+        t = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: f"<b>{m.group(1) or m.group(2)}</b>", t)
+        t = re.sub(r"~~(.+?)~~", r"<s>\1</s>", t)
+        t = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", t)
+        t = re.sub(r"(?<!\w)_(?!\s)(.+?)(?<!\s)_(?!\w)", r"<i>\1</i>", t)
+        out.append(t)
+    return "".join(out)
+
+
+def md_to_pango(md: str) -> str:
+    md = md.replace("\r\n", "\n")
+    if "\n" not in md and "\\n" in md:  # mosquitto_pub -m 'a\nb'
+        md = md.replace("\\n", "\n")
+    out, in_code = [], False
+    for line in md.split("\n"):
+        if line.strip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            out.append(f"<tt>{_esc(line)}</tt>")
+        elif m := re.match(r"^(#{1,3})\s+(.*)$", line):
+            size = _HEADING_SIZES[len(m.group(1))]
+            out.append(f'<span size="{size}" weight="bold">{_inline_md(m.group(2))}</span>')
+        elif m := re.match(r"^\s*[-*+]\s+(.*)$", line):
+            out.append("•  " + _inline_md(m.group(1)))
+        elif m := re.match(r"^\s*(\d+)[.)]\s+(.*)$", line):
+            out.append(f"{m.group(1)}. " + _inline_md(m.group(2)))
+        elif m := re.match(r"^>\s?(.*)$", line):
+            out.append("▎ <i>" + _inline_md(m.group(1)) + "</i>")
+        elif re.match(r"^(-{3,}|\*{3,})\s*$", line):
+            out.append("──────────")
+        else:
+            out.append(_inline_md(line))
+    return "\n".join(out)
 
 
 def connect_with_retry(client: mqtt.Client, host: str, port: int, keepalive: int = 60) -> None:
@@ -73,7 +134,9 @@ class NotificationOverlay(Gtk.Application):
         LayerShell.set_keyboard_mode(self.window, LayerShell.KeyboardMode.NONE)
 
         self.label = Gtk.Label(label="")
+        self.label.set_use_markup(True)
         self.label.set_wrap(True)
+        self.label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self.label.set_justify(Gtk.Justification.CENTER)
         self.label.set_halign(Gtk.Align.CENTER)
         self.label.add_css_class("notification-label")
@@ -98,7 +161,13 @@ class NotificationOverlay(Gtk.Application):
         GLib.idle_add(self._show_notification_ui, text)
 
     def _show_notification_ui(self, text: str) -> bool:
-        self.label.set_text(text)
+        markup = md_to_pango(text)
+        try:
+            Pango.parse_markup(markup, -1, "\0")
+            self.label.set_markup(markup)
+        except GLib.Error as exc:
+            print(f"Ungueltiges Markup ({exc}) - zeige Rohtext")
+            self.label.set_text(text)
         self.window.set_visible(True)
 
         if self._hide_timeout_id is not None:
