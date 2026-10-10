@@ -26,9 +26,9 @@ Verbindungsaufbau `display/kueche/cmd/#`.
 |---|---|---|
 | `display/kueche/cmd/mode` | `app` oder `slideshow` | Wechselt den Anzeigemodus. Bei `slideshow` wird der Kiosk-Tab zu `DIASHOW_URL` (`http://127.0.0.1:8090/`) navigiert; bei `app` wird die aktuell aktive App erneut aktiviert. |
 | `display/kueche/cmd/app` | `yuvomi`, `nodered` oder `custom:<url>` | Setzt die aktive App und `display_mode=app`. Bei `yuvomi` wird zusaetzlich der Familien-Login sichergestellt. `custom:` erlaubt eine beliebige URL, z. B. `custom:http://example.local/`. |
-| `display/kueche/cmd/display/power` | `on`, `off` oder `toggle` | Schaltet die Monitor-Stromversorgung ueber das Relais-Modul an GPIO17 (Pin 11). `off` = Relais zieht an, Monitor stromlos; `on` = Relais faellt ab, Monitor hat Strom. Kein `wlopm` und kein separater Prozess noetig; die Stromtrennung loest selbst ein HDMI-Hotplug-Ereignis aus. |
-| `display/kueche/cmd/wallmode` | `on` (alles andere = aus) | Aktiviert/deaktiviert den Wall Mode (setzt/loescht `localStorage`-Key `yuvomi-wall-mode` im Kiosk-Browser und laedt neu). |
-| `display/kueche/cmd/kindersicherung` | `on` (alles andere = aus) | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` bleibt auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `off` (keine Persistenz). Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
+| `display/kueche/cmd/display/power` | `true`, `false` oder `toggle` | Schaltet die Monitor-Stromversorgung ueber das Relais-Modul an GPIO17 (Pin 11). `false` = Relais zieht an, Monitor stromlos; `true` = Relais faellt ab, Monitor hat Strom. Kein `wlopm` und kein separater Prozess noetig; die Stromtrennung loest selbst ein HDMI-Hotplug-Ereignis aus. |
+| `display/kueche/cmd/wallmode` | `true` oder `false` | Aktiviert/deaktiviert den Wall Mode (setzt/loescht `localStorage`-Key `yuvomi-wall-mode` im Kiosk-Browser und laedt neu). |
+| `display/kueche/cmd/kindersicherung` | `true` oder `false` | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` bleibt auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `false` (keine Persistenz). Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
 | `display/kueche/cmd/notify` | beliebiger Text | Zeigt den Text im Notification-Overlay an (eigener Prozess `notification_overlay.py`, abonniert denselben Topic direkt; der Supervisor selbst loggt die Nachricht nur). |
 | `display/kueche/cmd/notify/clear` | beliebig (z. B. leer) | Blendet das Notification-Overlay sofort aus. |
 | `display/kueche/cmd/button/map` | JSON, z. B. `{"key":"2_long","topic":"cmd/mode","payload":"slideshow"}` | Belegt einen Taster (`key` = `1`-`4` + `_short`/`_long`) neu: Taste loest kuenftig eine Publish-Nachricht auf `topic` (relativ zu `display/kueche/`) mit `payload` aus. Persistiert unter `~/.kuechendisplay/button_map.json` und wird sofort per `status/button/map` erneut veroeffentlicht. Funktioniert unabhaengig vom Zustand der Kindersicherung. |
@@ -50,15 +50,15 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/app' -m nodered
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/app' -m 'custom:http://example.local/'
 
 # Monitor-Strom aus- bzw. umschalten (schaltet das Relais)
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m off
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m false
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m toggle
 
 # Wall Mode aktivieren
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/wallmode' -m on
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/wallmode' -m true
 
 # Kindersicherung ein- bzw. ausschalten
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/kindersicherung' -m on
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/kindersicherung' -m off
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/kindersicherung' -m true
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/kindersicherung' -m false
 
 # Benachrichtigung anzeigen und wieder ausblenden
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify' -m 'Muell rausbringen!'
@@ -66,7 +66,7 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify/clear' -m ''
 
 # Taster 2 (langer Druck) neu auf Wallmode-Ein belegen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
-  -m '{"key":"2_long","topic":"cmd/wallmode","payload":"on"}'
+  -m '{"key":"2_long","topic":"cmd/wallmode","payload":"true"}'
 
 # Testweise als individueller Nutzer anmelden
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/user' -m 'kind1:geheimespasswort'
@@ -93,9 +93,23 @@ MQTT-Meldungen und bleibt eigenstaendig nutzbar.
 | Topic | Payload | Zweck |
 |---|---|---|
 | `display/kueche/status/health` (retain, LWT) | JSON `{"online": true/false, "ts"/"reason": ...}` | Heartbeat alle `HEARTBEAT_INTERVAL_SECONDS` (30s) sowie Last-Will bei Verbindungsverlust bzw. sauberem Shutdown. |
-| `display/kueche/status/state` (retain) | JSON `{"display_power":"on/off", "display_mode":"app/slideshow", "active_app":"...", "active_user":"...", "wall_mode": true/false, "child_lock": true/false}` | Gesamtzustand des Displays, aktualisiert bei jeder relevanten Aenderung. |
-| `display/kueche/status/kindersicherung` (retain) | `on` / `off` | Aktueller Zustand der Kindersicherung; wird bei jedem Start des Supervisors explizit auf `off` gesetzt, unabhaengig von einem evtl. stehen gebliebenen retained Wert. |
+| `display/kueche/status/state` (retain) | JSON `{"display_power": true/false, "display_mode":"app/slideshow", "active_app":"...", "active_user":"...", "wall_mode": true/false, "child_lock": true/false}` | Gesamtzustand des Displays, aktualisiert bei jeder relevanten Aenderung. |
+| `display/kueche/status/kindersicherung` (retain) | `true` / `false` | Aktueller Zustand der Kindersicherung (identisch zu `child_lock` in `status/state`); wird bei jedem Start des Supervisors explizit auf `false` gesetzt, unabhaengig von einem evtl. stehen gebliebenen retained Wert. |
 | `display/kueche/status/button/map` (retain) | JSON aller vier Tastenbelegungen | Aktuelle Button-Map, wird bei Verbindungsaufbau und nach jeder Aenderung per `cmd/button/map` neu veroeffentlicht. |
+
+### Boolean-Konvention
+
+Alle Ein-/Aus-Werte sind JSON-Booleans: `true` oder `false` (ohne Anfuehrungszeichen,
+Kleinschreibung). Das gilt fuer `cmd/display/power` (zusaetzlich `toggle`),
+`cmd/wallmode`, `cmd/kindersicherung` sowie fuer `status/kindersicherung` und die
+Felder `display_power`, `wall_mode` und `child_lock` in `status/state`.
+
+Werte wie `on`, `off`, `1`, `0` oder `"true"` (String) werden nicht mehr akzeptiert:
+Der Supervisor schreibt eine Warnung ins Journal und aendert nichts. In Node-RED
+muss ein Publisher deshalb einen echten Boolean senden; ein Subscriber erhaelt den
+Payload zunaechst als Text und parst ihn bei Bedarf mit einem JSON-Node. In einer
+gespeicherten Button-Map muessen Payloads wie `on` fuer `cmd/wallmode` oder
+`cmd/display/power` per `cmd/button/map` auf `true` bzw. `false` umgestellt werden.
 
 ### Beispiele zum Lesen
 
