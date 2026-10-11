@@ -8,6 +8,15 @@ Chromium ist beim Systemstart u. U. noch nicht bereit, wenn der Supervisor berei
 
 Ursache: DNS/Netzwerk ist beim Boot oft noch nicht bereit, wenn labwc die Autostart-Datei ausfuehrt (`mqtt` nicht aufloesbar -> `socket.gaierror`). Das Skript nutzt `connect_with_retry()`, das die Verbindung wiederholt statt einmalig versucht. Falls der Fehler weiterhin auftritt, `MQTT_CONNECT_RETRY_DELAY_SECONDS` pruefen bzw. erhoehen.
 
+## Notification zeigt Markdown-Zeichen oder Rohtext statt Formatierung
+
+`notification_overlay.py` wandelt den Payload von `cmd/notify` in Pango-Markup um (siehe `docs/mqtt.md`, Abschnitt "Markdown in `cmd/notify`"). Wird stattdessen unformatierter Text angezeigt:
+
+- Overlay-Prozess neu starten: Nach einem `git pull` laeuft sonst noch die alte Version (Start ueber `~/.config/labwc/autostart`, mit `LD_PRELOAD`, siehe Dateikopf).
+- Log auf `Ungueltiges Markup (...)` pruefen: In diesem Fall faellt das Overlay bewusst auf den Rohtext zurueck.
+- Mehrzeilige Payloads in der Shell mit echten Zeilenumbruechen in einfachen Anfuehrungszeichen oder mit `$'...\n...'` senden; in doppelten Anfuehrungszeichen kann die Shell Backticks (`` ` ``) und `$` vorher ausfuehren.
+- Nicht unterstuetzt sind Tabellen, Bilder, verschachtelte Listen und HTML; diese erscheinen als normaler Text.
+
 ## Nutzerwechsel wirkt sich nicht auf status/state aus (Wall-Mode-Bug)
 
 Frueher aenderte `wall_mode.set()` nur den Browser-Zustand, ohne den `state_store` zu aktualisieren. Fix: `on_wall_mode_change`-Callback an `YuvomiUserManager` uebergeben, der den `state_store` explizit mitzieht (siehe `kuechendisplay_supervisor.py`, Konstruktor).
