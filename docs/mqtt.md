@@ -29,7 +29,7 @@ Verbindungsaufbau `display/kueche/cmd/#`.
 | `display/kueche/cmd/display/power` | `true`, `false` oder `toggle` | Schaltet die Monitor-Stromversorgung ueber das Relais-Modul an GPIO17 (Pin 11). `false` = Relais zieht an, Monitor stromlos; `true` = Relais faellt ab, Monitor hat Strom. Kein `wlopm` und kein separater Prozess noetig; die Stromtrennung loest selbst ein HDMI-Hotplug-Ereignis aus. |
 | `display/kueche/cmd/wallmode` | `true` oder `false` | Aktiviert/deaktiviert den Wall Mode (setzt/loescht `localStorage`-Key `yuvomi-wall-mode` im Kiosk-Browser und laedt neu). |
 | `display/kueche/cmd/kindersicherung` | `true` oder `false` | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` bleibt auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `false` (keine Persistenz). Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
-| `display/kueche/cmd/notify` | beliebiger Text | Zeigt den Text im Notification-Overlay an (eigener Prozess `notification_overlay.py`, abonniert denselben Topic direkt; der Supervisor selbst loggt die Nachricht nur). |
+| `display/kueche/cmd/notify` | Text, optional als Markdown (Teilmenge, siehe unten) | Zeigt den Text im Notification-Overlay an (eigener Prozess `notification_overlay.py`, abonniert denselben Topic direkt; der Supervisor selbst loggt die Nachricht nur, und zwar unveraendert). Das Overlay interpretiert den Payload als Markdown und stellt ihn formatiert dar; reiner Text ohne Sonderzeichen erscheint unveraendert. |
 | `display/kueche/cmd/notify/clear` | beliebig (z. B. leer) | Blendet das Notification-Overlay sofort aus. |
 | `display/kueche/cmd/button/map` | JSON, z. B. `{"key":"2_long","topic":"cmd/mode","payload":"slideshow"}` | Belegt einen Taster (`key` = `1`-`4` + `_short`/`_long`) neu: Taste loest kuenftig eine Publish-Nachricht auf `topic` (relativ zu `display/kueche/`) mit `payload` aus. Persistiert unter `~/.kuechendisplay/button_map.json` und wird sofort per `status/button/map` erneut veroeffentlicht. Funktioniert unabhaengig vom Zustand der Kindersicherung. |
 | `display/kueche/cmd/user` | `username:password` | Manueller Test-Login: meldet den angegebenen Yuvomi-Nutzer an (ohne Doppelpunkt wird die Nachricht ignoriert und eine Warnung geloggt). |
@@ -64,6 +64,15 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/kindersicherung' -m false
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify' -m 'Muell rausbringen!'
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify/clear' -m ''
 
+# Benachrichtigung mit Markdown (mehrzeilig)
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify' -m '# Muell
+**Heute** raus:
+- Restmuell
+- *Gelber Sack* und `Papier`'
+
+# Dasselbe einzeilig mit bash-ANSI-C-Quoting
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify' -m $'# Muell\n**Heute** raus:\n- Restmuell'
+
 # Taster 2 (langer Druck) neu auf Wallmode-Ein belegen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
   -m '{"key":"2_long","topic":"cmd/wallmode","payload":"true"}'
@@ -72,12 +81,47 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/user' -m 'kind1:geheimespasswort'
 ```
 
+### Markdown in `cmd/notify`
+
+`notification_overlay.py` wandelt den Payload mit `md_to_pango()` in
+Pango-Markup um und zeigt ihn in einem GTK4-Label an. Unterstuetzt wird
+folgende Markdown-Teilmenge:
+
+| Markdown | Darstellung |
+|---|---|
+| ``# Text``, ``## Text``, ``### Text`` | Ueberschrift H1-H3 (fett; xx-large / x-large / large) |
+| ``**Text**`` oder ``__Text__`` | fett |
+| ``*Text*`` oder ``_Text_`` | kursiv |
+| ``~~Text~~`` | durchgestrichen |
+| ``Code`` in einfachen Backticks | Monospace |
+| Codeblock (Zeilen mit drei Backticks als Begrenzer) | Monospace, Zeile fuer Zeile |
+| ``- Punkt``, ``* Punkt``, ``+ Punkt`` | Listenpunkt mit Aufzaehlungszeichen |
+| ``1. Punkt`` | nummerierte Liste (die Nummer bleibt erhalten) |
+| ``> Text`` | Zitat (kursiv, mit Balken) |
+| ``---`` | Trennlinie |
+| ``[Text](url)`` | nur der Text, unterstrichen (die URL wird nicht angezeigt, das Overlay ist nicht klickbar verlinkt) |
+
+Hinweise:
+
+- Nicht unterstuetzt: Tabellen, Bilder, verschachtelte Listen und HTML. Die
+  Zeichen `<`, `>` und `&` werden maskiert und als normaler Text angezeigt.
+- Zeilenumbrueche: Echte Zeilenumbrueche im Payload werden uebernommen. Ein
+  woertliches `\n` wird nur dann in einen Umbruch umgewandelt, wenn der
+  Payload keinen echten Zeilenumbruch enthaelt (z. B. `-m 'a\nb'`).
+- Ein `_` mitten im Wort (z. B. `test_1_x`) wird nicht als kursiv gedeutet.
+- Faellt das erzeugte Markup trotzdem durch die Pango-Pruefung, zeigt das
+  Overlay den Rohtext an und schreibt `Ungueltiges Markup (...)` ins Log.
+- Nach einem Update von `notification_overlay.py` muss der Prozess neu
+  gestartet werden (Start ueber `~/.config/labwc/autostart`, nicht systemd).
+
 ## Supervisor: Fehlermeldungen des Fingerabdrucksensors (`cmd/notify`)
 
 Fehler bei der Fingerabdruck-Erkennung veroeffentlicht der Supervisor selbst
 auf `display/kueche/cmd/notify`; das Notification-Overlay zeigt sie an. Pro
 Minute wird hoechstens eine solche Meldung gesendet
 (`ERROR_NOTIFY_COOLDOWN_SECONDS` in `supervisor/hardware_fingerprint.py`).
+Die Texte enthalten keine Markdown-Syntax und erscheinen daher unveraendert
+(siehe "Markdown in `cmd/notify`").
 
 | Text | Bedeutung |
 |---|---|
@@ -189,4 +233,5 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -m app
 `hardware_fingerprint.py`, `kiosk_controller.py`, `notification_overlay.py`,
 `slideshow/slideshow_service.py`, `docs/diashow.md`, `docs/hardware.md`).
 Display-Power (Relais an GPIO17), Kindersicherung und die Fehlermeldungen des
-Fingerabdrucksensors laufen direkt im Haupt-Supervisor.*
+Fingerabdrucksensors laufen direkt im Haupt-Supervisor.
+Markdown-Rendering in `notification_overlay.py` ergaenzt am 10.10.2026.*
