@@ -109,9 +109,10 @@ aus `secrets.json` abgeleitet) die Schluessel in `secrets.json`
 
 ```bash
 # Monitor ueber das Relais aus- und wieder einschalten
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m off
+# (Payload ist ein JSON-Boolean: false = Monitor aus, true = Monitor an)
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m false
 sleep 5
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m on
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/display/power' -m true
 
 # Fingerabdruck: Sensor beruehren, Log ansehen
 journalctl -u kuechendisplay-supervisor -f
