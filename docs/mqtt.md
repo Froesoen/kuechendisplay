@@ -29,11 +29,11 @@ Verbindungsaufbau `display/kueche/cmd/#`.
 | `display/kueche/cmd/slideshow/timeout` | Ganzzahl Sekunden (`0` oder mindestens `30`) | Stellt die Inaktivitaetszeit bis zum automatischen Wechsel zur Diashow ein. `0` schaltet den automatischen Wechsel aus. Wird in `~/.kuechendisplay/slideshow_timeout.json` gespeichert und per `status/slideshow/timeout` bestaetigt. Ungueltige Werte werden ignoriert und als Warnung geloggt. Siehe [`automatik.md`](automatik.md). |
 | `display/kueche/cmd/display/power` | `true`, `false` oder `toggle` | Schaltet die Monitor-Stromversorgung ueber das Relais-Modul an GPIO17 (Pin 11). `false` = Relais zieht an, Monitor stromlos; `true` = Relais faellt ab, Monitor hat Strom. Kein `wlopm` und kein separater Prozess noetig; die Stromtrennung loest selbst ein HDMI-Hotplug-Ereignis aus. |
 | `display/kueche/cmd/wallmode` | `true` oder `false` | Aktiviert/deaktiviert den Wall Mode (setzt/loescht `localStorage`-Key `yuvomi-wall-mode` im Kiosk-Browser und laedt neu). |
-| `display/kueche/cmd/kindersicherung` | `true` oder `false` | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` bleibt auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `false` (keine Persistenz). Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
+| `display/kueche/cmd/kindersicherung` | `true` oder `false` | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` und `cmd/user` bleiben auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `false` (keine Persistenz); ein MQTT-Reconnect (z. B. Broker-Neustart) aendert den Zustand nicht. Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
 | `display/kueche/cmd/notify` | Text, optional als Markdown (Teilmenge, siehe unten) | Zeigt den Text im Notification-Overlay an (eigener Prozess `notification_overlay.py`, abonniert denselben Topic direkt; der Supervisor selbst loggt die Nachricht nur, und zwar unveraendert). Das Overlay interpretiert den Payload als Markdown und stellt ihn formatiert dar; reiner Text ohne Sonderzeichen erscheint unveraendert. |
 | `display/kueche/cmd/notify/clear` | beliebig (z. B. leer) | Blendet das Notification-Overlay sofort aus. |
 | `display/kueche/cmd/button/map` | JSON, z. B. `{"key":"2_long","topic":"cmd/mode","payload":"slideshow"}` | Belegt einen Taster (`key` = `1`-`4` + `_short`/`_long`) neu: Taste loest kuenftig eine Publish-Nachricht auf `topic` (relativ zu `display/kueche/`) mit `payload` aus. Persistiert unter `~/.kuechendisplay/button_map.json` und wird sofort per `status/button/map` erneut veroeffentlicht. Funktioniert unabhaengig vom Zustand der Kindersicherung. |
-| `display/kueche/cmd/user` | `username:password` | Manueller Test-Login: meldet den angegebenen Yuvomi-Nutzer an (ohne Doppelpunkt wird die Nachricht ignoriert und eine Warnung geloggt). |
+| `display/kueche/cmd/user` | Kennung eines individuellen Kontos, z. B. `person_c` | Meldet den zugehoerigen Yuvomi-Nutzer an, genau wie der Fingerabdruck-Login: Die Kennung ist der Schluessel in `secrets.json` (`individual_accounts`) bzw. in `fingerprint_mapping.py`; Benutzername und Passwort liegen lokal auf dem Geraet und werden **nicht** per MQTT gesendet. Setzt `active_app=yuvomi` und `display_mode=app`. Unbekannte Kennungen oder Kennungen ohne hinterlegte Zugangsdaten fuehren zu keiner Anmeldung (Warnung im Journal mit den bekannten Kennungen). Das alte Format `username:passwort` wird abgelehnt. Der Payload von `cmd/user` wird nie protokolliert. Wird von der Kindersicherung nicht blockiert. |
 
 ### Aktivitaet und Timer
 
@@ -42,6 +42,21 @@ zurueck; dieser reagiert nur auf Touch im Kiosk-Browser. Den Timer fuer den
 automatischen Wechsel zur Diashow setzen Kommandos auf `cmd/#` zurueck, mit
 Ausnahme von `cmd/notify`, `cmd/notify/clear`, `cmd/button/map` und
 `cmd/slideshow/timeout`. Details siehe [`automatik.md`](automatik.md).
+
+### Retained Nachrichten und Reconnect
+
+Der Broker wiederholt gespeicherte (retained) Nachrichten beim Verbinden und
+bei jedem Reconnect des Abonnenten. Der Supervisor ignoriert solche
+wiederholten `cmd/#`-Nachrichten (Journal: `Retained Nachricht auf ...
+ignoriert`), damit ein einmal gespeichertes Kommando nicht nach jedem
+Broker-Neustart erneut ausgefuehrt wird. Live gesendete Kommandos wirken
+unveraendert, auch wenn der Publisher das Retain-Flag setzt; nach einem
+Reconnect werden sie aber nicht erneut ausgefuehrt. Bereits gespeicherte
+retained Kommandos lassen sich mit einer leeren retained Nachricht loeschen:
+
+```bash
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -n -r
+```
 
 ### Beispiele
 
@@ -90,8 +105,8 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify' -m $'# Muell\n**Heu
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
   -m '{"key":"2_long","topic":"cmd/wallmode","payload":"true"}'
 
-# Testweise als individueller Nutzer anmelden
-mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/user' -m 'kind1:geheimespasswort'
+# Als individueller Nutzer anmelden (Kennung aus secrets.json, ohne Passwort)
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/user' -m 'person_c'
 ```
 
 ### Markdown in `cmd/notify`
@@ -152,7 +167,7 @@ MQTT-Meldungen und bleibt eigenstaendig nutzbar.
 | `display/kueche/status/health` (retain, LWT) | JSON `{"online": true/false, "ts"/"reason": ...}` | Heartbeat alle `HEARTBEAT_INTERVAL_SECONDS` (30s) sowie Last-Will bei Verbindungsverlust bzw. sauberem Shutdown. |
 | `display/kueche/status/state` (retain) | JSON `{"display_power": true/false, "display_mode":"app/slideshow", "active_app":"...", "active_user":"...", "wall_mode": true/false, "child_lock": true/false, "slideshow_timeout": 600}` | Gesamtzustand des Displays, aktualisiert bei jeder relevanten Aenderung. `slideshow_timeout` in Sekunden, `0` = automatischer Wechsel zur Diashow aus. |
 | `display/kueche/status/slideshow/timeout` (retain) | Ganzzahl Sekunden | Aktueller Diashow-Timeout (identisch zu `slideshow_timeout` in `status/state`); wird bei jeder Zustandsaenderung neu veroeffentlicht. |
-| `display/kueche/status/kindersicherung` (retain) | `true` / `false` | Aktueller Zustand der Kindersicherung (identisch zu `child_lock` in `status/state`); wird bei jedem Start des Supervisors explizit auf `false` gesetzt, unabhaengig von einem evtl. stehen gebliebenen retained Wert. |
+| `display/kueche/status/kindersicherung` (retain) | `true` / `false` | Aktueller Zustand der Kindersicherung (identisch zu `child_lock` in `status/state`); wird beim Start des Supervisors explizit auf `false` gesetzt, unabhaengig von einem evtl. stehen gebliebenen retained Wert. Bei einem MQTT-Reconnect bleibt der Zustand erhalten und wird nur erneut veroeffentlicht. |
 | `display/kueche/status/button/map` (retain) | JSON aller vier Tastenbelegungen | Aktuelle Button-Map, wird bei Verbindungsaufbau und nach jeder Aenderung per `cmd/button/map` neu veroeffentlicht. |
 
 ### Boolean-Konvention
@@ -252,4 +267,6 @@ Display-Power (Relais an GPIO17), Kindersicherung und die Fehlermeldungen des
 Fingerabdrucksensors laufen direkt im Haupt-Supervisor.
 Markdown-Rendering in `notification_overlay.py` ergaenzt am 10.10.2026.
 Auto-Logout per Touch, Diashow-Timeout (`cmd/slideshow/timeout`) und
-Direkt-Logout ergaenzt am 15.10.2026 (siehe `docs/automatik.md`).*
+Direkt-Logout ergaenzt am 15.10.2026 (siehe `docs/automatik.md`).
+`cmd/user` per Kennung ohne Passwort, Reconnect-Verhalten der
+Kindersicherung und Ignorieren retained Kommandos ergaenzt am 15.10.2026.*
