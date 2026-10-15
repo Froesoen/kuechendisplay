@@ -35,7 +35,8 @@ from gpiozero import OutputDevice
 from config import (
     MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_BASE_TOPIC,
     YUVOMI_BASE_URL, DEFAULT_APP_URLS, HEARTBEAT_INTERVAL_SECONDS,
-    SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS, DISPLAY_PREFERENCES, DIASHOW_URL,
+    SLIDESHOW_TIMEOUT_MIN_SECONDS, load_slideshow_timeout, save_slideshow_timeout,
+    DISPLAY_PREFERENCES, DIASHOW_URL,
     MONITOR_POWER_GPIO, CHILD_LOCK_NOTIFY_TEXT,
 )
 from state import StateStore
@@ -51,6 +52,16 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
 )
 log = logging.getLogger("supervisor")
+
+# Diese Topics gelten NICHT als Nutzeraktivitaet fuer den Diashow-Timer.
+# Insbesondere die vom Supervisor selbst gesendete Abmelde-Warnung (cmd/notify)
+# kommt ueber das Abo cmd/# wieder an und darf keinen Timer zuruecksetzen.
+IGNORED_ACTIVITY_TOPICS = {
+    "cmd/notify",
+    "cmd/notify/clear",
+    "cmd/button/map",
+    "cmd/slideshow/timeout",
+}
 
 
 def full_topic(sub_topic: str) -> str:
@@ -80,6 +91,8 @@ class Supervisor:
         self.wall_mode = WallModeController(self.kiosk)
 
         self.state_store = StateStore(on_change=self._publish_state)
+        # Direkt setzen (kein update()): der MQTT-Client existiert hier noch nicht.
+        self.state_store.state.slideshow_timeout = load_slideshow_timeout()
 
         self.yuvomi_users = YuvomiUserManager(
             self.yuvomi_session,
@@ -88,6 +101,7 @@ class Supervisor:
             on_wall_mode_change=lambda enabled: self.state_store.update(wall_mode=enabled),
             on_notify=lambda text: self._publish(full_topic("cmd/notify"), text, False),
             on_notify_clear=lambda: self._publish(full_topic("cmd/notify/clear"), "", False),
+            on_touch=self._note_activity,
         )
 
         self.button_mapper = ButtonMapper(publish_fn=self._publish)
@@ -131,6 +145,11 @@ class Supervisor:
         state["display_power"] = state["display_power"] == "on"
         state["active_user"] = self.yuvomi_users.current_user
         self._publish(full_topic("status/state"), json.dumps(state), True)
+        self._publish(
+            full_topic("status/slideshow/timeout"),
+            str(self.state_store.state.slideshow_timeout),
+            True,
+        )
         log.info("status/state aktualisiert: %s", state)
 
     def _publish_heartbeat(self) -> None:
@@ -147,29 +166,35 @@ class Supervisor:
     def _slideshow_watchdog_loop(self) -> None:
         while not self._shutdown_event.is_set():
             time.sleep(10)
+            timeout = self.state_store.state.slideshow_timeout
+            if timeout <= 0:
+                continue
             idle = time.time() - self._last_general_activity
-            if self.state_store.state.display_mode == "app" and idle >= SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS:
-                log.info(
-                    "Inaktivitaet %ss ueberschritten - wechsle automatisch zu Slideshow",
-                    SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS,
-                )
+            if self.state_store.state.display_mode == "app" and idle >= timeout:
+                log.info("Inaktivitaet %ss ueberschritten - wechsle automatisch zu Slideshow", timeout)
                 self._set_display_mode("slideshow")
 
     def _set_display_mode(self, mode: str) -> None:
         if mode not in ("app", "slideshow"):
             log.error("Ungueltiger display_mode: %s", mode)
             return
-        self.state_store.update(display_mode=mode)
         if mode == "slideshow":
+            # Logout VOR der Navigation: der Wall-Mode-Reload im Rueckfall
+            # soll noch die Yuvomi-Seite treffen, nicht die Diashow.
+            self.yuvomi_users.logout_individual_user(reason="Diashow")
+            self.state_store.update(display_mode=mode)
             log.info("Wechsle zu Diashow: %s", DIASHOW_URL)
             self.kiosk.navigate(DIASHOW_URL)
-        elif mode == "app":
+            self.yuvomi_users.reset_browser_activity_baseline()
+        else:
+            self.state_store.update(display_mode=mode)
             self._set_active_app(self.state_store.state.active_app)
 
     def _set_active_app(self, app: str) -> None:
         if app == "yuvomi":
             self.state_store.update(active_app=app, display_mode="app")
             self.yuvomi_users.ensure_familie_active()
+            self.yuvomi_users.reset_browser_activity_baseline()
             return
         url = DEFAULT_APP_URLS.get(app)
         if url is None and app.startswith("custom:"):
@@ -177,8 +202,10 @@ class Supervisor:
         if url is None:
             log.error("Unbekannte App: %s", app)
             return
+        self.yuvomi_users.logout_individual_user(reason="App-Wechsel")
         self.state_store.update(active_app=app, display_mode="app")
         self.kiosk.navigate(url)
+        self.yuvomi_users.reset_browser_activity_baseline()
 
     def _set_display_power(self, powered_on: bool) -> None:
         if powered_on:
@@ -250,10 +277,12 @@ class Supervisor:
         payload = msg.payload.decode("utf-8", errors="replace")
         log.info("MQTT empfangen: %s = %s", topic, payload)
 
-        self._note_activity()
-        self.yuvomi_users.on_activity()
-
         sub_topic = topic[len(MQTT_BASE_TOPIC):] if topic.startswith(MQTT_BASE_TOPIC) else topic
+
+        # Nur der Diashow-Timer wird durch MQTT-Kommandos zurueckgesetzt. Der
+        # Inaktivitaets-Logout individueller Nutzer reagiert NICHT auf MQTT.
+        if sub_topic not in IGNORED_ACTIVITY_TOPICS:
+            self._note_activity()
 
         try:
             if sub_topic == "cmd/mode":
@@ -294,6 +323,24 @@ class Supervisor:
                     self.yuvomi_users.switch_user(username, password)
                 else:
                     log.warning("cmd/user erwartet 'username:password' zum Testen")
+            elif sub_topic == "cmd/slideshow/timeout":
+                try:
+                    timeout = int(payload.strip())
+                except ValueError:
+                    log.warning("%s erwartet ganze Sekunden oder 0; empfangen: %r", sub_topic, payload)
+                else:
+                    if timeout == 0 or timeout >= SLIDESHOW_TIMEOUT_MIN_SECONDS:
+                        self.state_store.update(slideshow_timeout=timeout)
+                        save_slideshow_timeout(timeout)
+                        log.info(
+                            "Automatischer Diashow-Wechsel: %s",
+                            "deaktiviert" if timeout == 0 else f"nach {timeout}s",
+                        )
+                    else:
+                        log.warning(
+                            "%s: %ds ungueltig (0 oder mindestens %ds)",
+                            sub_topic, timeout, SLIDESHOW_TIMEOUT_MIN_SECONDS,
+                        )
             else:
                 log.warning("Unbekanntes Topic: %s", sub_topic)
         except Exception:

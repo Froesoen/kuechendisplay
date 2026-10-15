@@ -20,6 +20,7 @@ class DisplayState:
     active_user: str = "Familie"  # Familie | person_c | person_d
     wall_mode: bool = False
     child_lock: bool = False      # Kindersicherung: sperrt Taster/Fingerprint/Touch
+    slideshow_timeout: int = 600  # Sekunden bis Auto-Diashow; 0 = automatischer Wechsel aus
 
     def as_dict(self) -> dict:
         return {
@@ -29,6 +30,7 @@ class DisplayState:
             "active_user": self.active_user,
             "wall_mode": self.wall_mode,
             "child_lock": self.child_lock,
+            "slideshow_timeout": self.slideshow_timeout,
         }
 
 

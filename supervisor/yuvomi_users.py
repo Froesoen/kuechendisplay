@@ -3,13 +3,17 @@
 - Lock-Bereich umfasst den GESAMTEN Logout/Login-Ablauf.
 - Automatische Wall-Mode-Steuerung: Familie -> an (ausser explizit abgewaehlt), individueller Nutzer -> aus.
 - state_store wird per on_wall_mode_change-Callback explizit mitgezogen.
-- Echte Browser-Nutzung (Klick/Touch/Tastatur/Scroll im yuvomi-Tab) wird per
-  CDP-Polling erkannt und zaehlt ebenfalls als Aktivitaet (siehe
-  kiosk_controller.KioskController.get_browser_last_activity_ms), damit der
-  Inaktivitaets-Timeout waehrend echter Bedienung nicht faelschlich ablaeuft.
+- Der Inaktivitaets-Timeout individueller Nutzer wird NUR durch echte
+  Touch-Beruehrungen im Kiosk-Browser (CDP-Polling, siehe
+  kiosk_controller.KioskController.get_browser_last_activity_ms) sowie durch
+  Nutzerwechsel zurueckgesetzt. MQTT-Nachrichten und Taster zaehlen nicht.
+- Jeder Touch wird zusaetzlich ueber on_touch an den Diashow-Timer des
+  Supervisors gemeldet.
 - LOGOUT_WARNING_LEAD_SECONDS vor dem automatischen Rueckfall auf Familie wird
   einmalig eine Bildschirm-Benachrichtigung ausgeloest (on_notify), die bei
-  erneuter Aktivitaet sofort wieder zurueckgenommen wird (on_notify_clear).
+  erneutem Touch sofort wieder zurueckgenommen wird (on_notify_clear).
+- logout_individual_user() meldet einen individuellen Nutzer sofort ab
+  (z. B. beim Wechsel zur Diashow oder zu einer anderen App).
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ class YuvomiUserManager:
         on_change: Optional[Callable[[], None]] = None,
         on_notify: Optional[Callable[[str], None]] = None,
         on_notify_clear: Optional[Callable[[], None]] = None,
+        on_touch: Optional[Callable[[], None]] = None,
     ) -> None:
         self.session_manager = session_manager
         self.wall_mode = wall_mode
@@ -46,6 +51,7 @@ class YuvomiUserManager:
         self.on_wall_mode_change = on_wall_mode_change
         self.on_notify = on_notify
         self.on_notify_clear = on_notify_clear
+        self.on_touch = on_touch
         self.current_user = FAMILIE_USERNAME
         self.on_change = on_change
         self._last_activity = time.time()
@@ -84,6 +90,13 @@ class YuvomiUserManager:
             self._last_activity = time.time()
         self._clear_pending_logout_warning()
 
+    def reset_browser_activity_baseline(self) -> None:
+        """Nach Supervisor-initiierter Navigation aufrufen.
+
+        Der naechste gelesene Touch-Zeitstempel zaehlt dann wieder als Aktivitaet.
+        """
+        self._last_seen_browser_activity_ms = None
+
     def _browser_activity_loop(self) -> None:
         while True:
             time.sleep(BROWSER_ACTIVITY_POLL_INTERVAL_SECONDS)
@@ -93,16 +106,19 @@ class YuvomiUserManager:
                 log.exception("Browser-Aktivitaet konnte nicht abgefragt werden")
                 continue
 
+            # None = noch keine Touch-Beruehrung auf der aktuellen Seite (Wert 0)
+            # oder Wert gerade nicht lesbar.
             if current_ms is None:
                 continue
 
-            if self._last_seen_browser_activity_ms is None:
-                self._last_seen_browser_activity_ms = current_ms
-                continue
-
-            if current_ms > self._last_seen_browser_activity_ms:
+            if (
+                self._last_seen_browser_activity_ms is None
+                or current_ms > self._last_seen_browser_activity_ms
+            ):
                 self._last_seen_browser_activity_ms = current_ms
                 self.on_activity()
+                if self.on_touch:
+                    self.on_touch()
 
     def ensure_familie_active(self, wall_mode: bool = True) -> None:
         with self._lock:
@@ -143,14 +159,26 @@ class YuvomiUserManager:
             self._notify_change()
         return ok
 
-    def _fallback_to_familie(self) -> None:
+    def logout_individual_user(self, reason: str = "Seitenwechsel") -> bool:
+        """Meldet einen individuellen Nutzer sofort ab (Rueckfall auf Familie).
+
+        Liefert False, wenn bereits Familie aktiv war (nichts zu tun).
+        """
+        with self._lock:
+            if self.current_user == FAMILIE_USERNAME:
+                return False
+            log.info("Direkter Logout von '%s' (%s)", self.current_user, reason)
+        self._fallback_to_familie(reason=reason)
+        return True
+
+    def _fallback_to_familie(self, reason: str = "Inaktivitaet") -> None:
         with self._lock:
             if self.current_user == FAMILIE_USERNAME:
                 return
             previous_user = self.current_user
             log.info(
-                "Inaktivitaet %ss ueberschritten - Rueckfall von '%s' zu '%s'",
-                USER_INACTIVITY_TIMEOUT_SECONDS, previous_user, FAMILIE_USERNAME,
+                "Rueckfall von '%s' zu '%s' (Grund: %s, Inaktivitaets-Timeout %ss)",
+                previous_user, FAMILIE_USERNAME, reason, USER_INACTIVITY_TIMEOUT_SECONDS,
             )
             self.session_manager.logout()
             self.session_manager.login(FAMILIE_USERNAME, FAMILIE_PASSWORD)

@@ -27,15 +27,20 @@ CDP_WAIT_POLL_INTERVAL_SECONDS = 2
 YUVOMI_BASE_URL = "http://planer:3000"
 YUVOMI_REQUEST_TIMEOUT_SECONDS = 15
 YUVOMI_RETRY_DELAY_SECONDS = 3
-# Inaktivitaets-Timeout fuer individuelle Konten - zaehlt echte Browser-Nutzung
-# (Klick/Touch/Tastatur/Scroll, siehe kiosk_controller Activity-Tracker) UND
-# MQTT-/Taster-Aktivitaet. Bewusst kurz gehalten (3 Minuten), damit nach
-# Nutzungsende zuegig auf Familie zurueckgefallen wird.
+# Inaktivitaets-Timeout fuer individuelle Konten. Zaehlt ausschliesslich echte
+# Touch-Beruehrungen im Kiosk-Browser (touchstart, siehe kiosk_controller
+# Activity-Tracker) sowie Nutzerwechsel per Fingerabdruck. MQTT-Nachrichten
+# und Taster setzen diesen Timer NICHT zurueck. Zusaetzlich erfolgt ein
+# direkter Logout beim Wechsel zu Diashow oder einer anderen App.
 USER_INACTIVITY_TIMEOUT_SECONDS = 3 * 60
 
 # --- Display / Zustand ---
 HEARTBEAT_INTERVAL_SECONDS = 30
+# Default fuer den automatischen Wechsel zur Diashow (Sekunden). Zur Laufzeit
+# per MQTT (cmd/slideshow/timeout) aenderbar und in SLIDESHOW_TIMEOUT_FILE
+# persistiert. 0 = automatischer Wechsel aus.
 SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS = 10 * 60
+SLIDESHOW_TIMEOUT_MIN_SECONDS = 30
 
 DEFAULT_APP_URLS = {
     "yuvomi": YUVOMI_BASE_URL,
@@ -51,7 +56,8 @@ DISPLAY_PREFERENCES = {
 # Lokaler Webserver des slideshow-Moduls (slideshow/systemd/kuechendisplay-diashow-web.service).
 # Wird von _set_display_mode("slideshow") angesteuert - ausgeloest durch Button 2
 # (button_mapper: 2_short -> cmd/mode=slideshow), den Inaktivitaets-Watchdog nach
-# SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS oder ein manuelles MQTT-Kommando.
+# dem konfigurierten Diashow-Timeout (Default SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS,
+# per MQTT cmd/slideshow/timeout aenderbar, 0 = aus) oder ein manuelles MQTT-Kommando.
 DIASHOW_URL = "http://127.0.0.1:8090/"
 
 # --- Display-Power (Relais-Modul, siehe docs/hardware.md) ---
@@ -105,6 +111,7 @@ CHILD_LOCK_NOTIFY_TEXT = "Kindersicherung"
 SECRETS_FILE = Path.home() / ".kuechendisplay" / "secrets.json"
 BUTTON_MAP_CACHE_FILE = Path.home() / ".kuechendisplay" / "button_map.json"
 FINGERPRINT_MAPPING_FILE = Path.home() / ".kuechendisplay" / "fingerprint_mapping.py"
+SLIDESHOW_TIMEOUT_FILE = Path.home() / ".kuechendisplay" / "slideshow_timeout.json"
 
 
 def load_secrets() -> dict:
@@ -121,6 +128,28 @@ def load_secrets() -> dict:
             SECRETS_FILE,
         )
     return {}
+
+
+def load_slideshow_timeout() -> int:
+    """Liest den persistierten Diashow-Timeout (Sekunden; 0 = aus), sonst Default."""
+    try:
+        value = int(json.loads(SLIDESHOW_TIMEOUT_FILE.read_text(encoding="utf-8"))["timeout"])
+        if value == 0 or value >= SLIDESHOW_TIMEOUT_MIN_SECONDS:
+            return value
+        log.warning("Gespeicherter Diashow-Timeout %s ungueltig - nutze Default", value)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        log.exception("Diashow-Timeout konnte nicht gelesen werden - nutze Default")
+    return SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS
+
+
+def save_slideshow_timeout(value: int) -> None:
+    try:
+        SLIDESHOW_TIMEOUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SLIDESHOW_TIMEOUT_FILE.write_text(json.dumps({"timeout": value}), encoding="utf-8")
+    except Exception:
+        log.exception("Diashow-Timeout konnte nicht gespeichert werden")
 
 
 SECRETS = load_secrets()

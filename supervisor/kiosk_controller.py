@@ -20,17 +20,18 @@ from config import CDP_URL, CDP_WAIT_TIMEOUT_SECONDS, CDP_WAIT_POLL_INTERVAL_SEC
 log = logging.getLogger("supervisor.kiosk")
 
 # Wird per CDP bei jedem Seitenaufbau automatisch injiziert (ueberlebt also
-# auch Reloads durch Wall-Mode-Umschaltung), damit der Supervisor echte
-# Browser-Nutzung (nicht nur MQTT/Taster) fuer den Inaktivitaets-Timeout
-# sehen kann (siehe yuvomi_users._browser_activity_loop).
+# auch Reloads durch Wall-Mode-Umschaltung). Erfasst ausschliesslich echte
+# Touch-Beruehrungen (touchstart). Der Zeitstempel startet bei 0 und wird NICHT
+# beim Seitenaufbau gesetzt, damit Navigation/Reload nicht als Nutzeraktivitaet
+# gewertet wird (siehe yuvomi_users._browser_activity_loop).
 ACTIVITY_TRACKER_SCRIPT = """
 (function() {
-  window.__kuechendisplayLastActivity = Date.now();
-  ["click", "touchstart", "keydown", "scroll", "mousemove"].forEach(function(evt) {
-    window.addEventListener(evt, function() {
-      window.__kuechendisplayLastActivity = Date.now();
-    }, {passive: true, capture: true});
-  });
+  if (typeof window.__kuechendisplayLastActivity === "undefined") {
+    window.__kuechendisplayLastActivity = 0;
+  }
+  window.addEventListener("touchstart", function() {
+    window.__kuechendisplayLastActivity = Date.now();
+  }, {passive: true, capture: true});
 })();
 """
 
@@ -124,9 +125,10 @@ class KioskController:
     def get_browser_last_activity_ms(self) -> Optional[int]:
         """Liest window.__kuechendisplayLastActivity aus der aktuellen Seite.
 
-        Liefert None, wenn der Wert (noch) nicht gelesen werden kann (z. B.
-        waehrend eines Reloads) - der Aufrufer soll das dann einfach beim
-        naechsten Poll erneut versuchen.
+        Liefert None, wenn noch keine Touch-Beruehrung stattgefunden hat
+        (Wert 0) oder der Wert nicht gelesen werden kann (z. B. waehrend
+        eines Reloads) - der Aufrufer soll das dann einfach beim naechsten
+        Poll erneut versuchen.
         """
         try:
             result = self.evaluate("window.__kuechendisplayLastActivity || 0")
