@@ -26,11 +26,13 @@ Supervisor-Integration (Button 2) und verifiziertem Reboot-Verhalten.
   Port 8090 fuer den Kiosk-Browser aus.
 - **Supervisor-Integration**: `supervisor/config.py` definiert
   `DIASHOW_URL = "http://127.0.0.1:8090/"`. `_set_display_mode("slideshow")`
-  im Supervisor navigiert den bestehenden Kiosk-Tab per CDP zu dieser URL.
-  Button 2 (kurz) ist im `button_mapper.py` standardmaessig auf
-  `cmd/mode=slideshow` gemappt; zusaetzlich schaltet der bestehende
-  Inaktivitaets-Watchdog nach `SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS`
-  (10 Minuten) automatisch dorthin.
+  im Supervisor meldet zuerst einen angemeldeten individuellen Yuvomi-Nutzer
+  sofort ab und navigiert dann den bestehenden Kiosk-Tab per CDP zu dieser
+  URL. Button 2 (kurz) ist im `button_mapper.py` standardmaessig auf
+  `cmd/mode=slideshow` gemappt; zusaetzlich schaltet der Inaktivitaets-Watchdog
+  nach der konfigurierten Zeit automatisch dorthin (Standard 10 Minuten =
+  `SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS`, per MQTT `cmd/slideshow/timeout`
+  aenderbar, `0` = aus; siehe [`automatik.md`](automatik.md)).
 
 ## Einrichtung
 
@@ -222,6 +224,9 @@ Wechsle zu Diashow: http://127.0.0.1:8090/
 supervisor.kiosk: Navigiere zu http://127.0.0.1:8090/
 ```
 
+War ein individueller Yuvomi-Nutzer angemeldet, steht davor zusaetzlich
+`Direkter Logout von '...' (Diashow)`.
+
 Rueckkehr zur App-Ansicht (z. B. Yuvomi) manuell testen:
 
 ```bash
@@ -229,8 +234,16 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -m app
 ```
 
 Der automatische Inaktivitaets-Watchdog schaltet zusaetzlich nach 10 Minuten
-ohne Aktivitaet selbststaendig auf die Diashow um (bestehende Supervisor-
-Logik, `SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS`).
+ohne Aktivitaet (Standard) selbststaendig auf die Diashow um. Die Zeit laesst
+sich per MQTT aendern, `0` schaltet den automatischen Wechsel aus:
+
+```bash
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/slideshow/timeout' -m 900
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/slideshow/timeout' -m 0
+```
+
+Details zu Aktivitaetsquellen und Zusammenspiel mit dem Auto-Logout stehen in
+[`automatik.md`](automatik.md).
 
 ## MQTT-Schnittstelle (Diashow-Modul)
 
@@ -243,8 +256,10 @@ Logik, `SLIDESHOW_INACTIVITY_TIMEOUT_SECONDS`).
 
 Zur Abgrenzung: Das Umschalten der **Anzeige** (Button 2, Watchdog) laeuft
 ueber den bestehenden Supervisor-Namensraum `display/kueche/cmd/mode`, nicht
-ueber die obigen Diashow-Topics. Die Diashow-Topics steuern ausschliesslich
-Inhalt/Tempo der Diashow selbst, unabhaengig davon, ob sie gerade sichtbar ist.
+ueber die obigen Diashow-Topics; die Zeit bis zum automatischen Wechsel
+stellt `display/kueche/cmd/slideshow/timeout` ein. Die Diashow-Topics steuern
+ausschliesslich Inhalt/Tempo der Diashow selbst, unabhaengig davon, ob sie
+gerade sichtbar ist.
 
 Beispiele:
 
@@ -288,6 +303,9 @@ sichtbare Bild nicht abrupt unterbrochen wird.
 - **Diashow zeigt nach Reboot ein altes Bild**: pruefen, ob
   `kuechendisplay-diashow.service` tatsaechlich laeuft und der NAS-Mount
   aktiv ist (`findmnt /mnt/diashow`); der Dienst scannt beim Start neu.
+- **Diashow startet nicht automatisch**: `display/kueche/status/slideshow/timeout`
+  pruefen (`0` = aus) und ob Taster, Touch oder MQTT-Kommandos den Timer
+  laufend zuruecksetzen (siehe [`automatik.md`](automatik.md)).
 
 ## Reboot-Test (verifiziertes Verfahren)
 

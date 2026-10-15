@@ -7,11 +7,13 @@ Raspberry-Pi-Kiosk-Display mit Familienplaner-Anzeige (Yuvomi), Fingerabdruck-Lo
 - `supervisor/` - aktiver Python-Supervisor (v2), orchestriert Chromium-Kiosk, Yuvomi-Login/-Logout, Zustandsmodell, Taster- und Fingerabdruck-Hardware, Display-Power (Relais), Kindersicherung, MQTT.
 - `fingerprint-admin/` - eigenstaendiges Tkinter-GUI-Tool zur Verwaltung des Fingerabdrucksensors (Enrollment, Backup/Restore, Passwortverwaltung). Bewusst getrennt vom Supervisor, damit es auch fuer andere Projekte mit demselben Sensor wiederverwendbar bleibt.
 - `archive/` - veraltete erste Testversionen (v1-Supervisor, CLI-Fingerabdruck-Tool), nur zur Historie, nicht mehr gepflegt.
-- `docs/` - Hardware-Verkabelung, GPIO-Belegung, MQTT-Schnittstelle, Kiosk/labwc-Konfiguration, Diashow, Installation, Troubleshooting.
+- `docs/` - Hardware-Verkabelung, GPIO-Belegung, MQTT-Schnittstelle, Kiosk/labwc-Konfiguration, Diashow, automatische Moduswechsel, Installation, Troubleshooting.
 
 ## Architekturueberblick
 
 Der Supervisor laeuft als systemd-Dienst `kuechendisplay-supervisor.service` und steuert einen im Kiosk-Modus laufenden Chromium-Browser per Chrome DevTools Protocol. Er reagiert auf MQTT-Kommandos (Topic-Praefix `display/kueche/cmd/...`) und meldet seinen Zustand unter `display/kueche/status/...` zurueck. Die Display-Power-Steuerung (Monitor-Strom ueber ein Relais an GPIO17, Pin 11) und die Fingerprint-Versorgung (BC327 an GPIO27) laufen direkt im Supervisor; `wlopm` und ein separater Prozess sind dafuer nicht mehr noetig.
+
+Zwei Inaktivitaets-Automatiken sind eingebaut: Ein individueller Yuvomi-Nutzer wird nach 3 Minuten ohne Touch auf "Familie" zurueckgesetzt (und sofort beim Wechsel zur Diashow oder zu einer anderen App); nach standardmaessig 10 Minuten ohne Aktivitaet wechselt das Display zur Diashow (per MQTT einstellbar, `0` = aus). Details in [`docs/automatik.md`](docs/automatik.md).
 
 Ein zusaetzlicher, unabhaengiger Prozess ergaenzt ihn:
 
@@ -26,7 +28,7 @@ Das Repository ist so aufgebaut, dass es 1:1 als Checkout auf dem Raspberry Pi d
   supervisor/               <- systemd-Dienst startet hieraus
   fingerprint-admin/        <- GUI-Start hieraus
   docs/
-~/.kuechendisplay/          <- NICHT im Repo: secrets.json, fingerprint_mapping.py, button_map.json
+~/.kuechendisplay/          <- NICHT im Repo: secrets.json, fingerprint_mapping.py, button_map.json, slideshow_timeout.json
 ~/kuechendisplay-venv/      <- NICHT im Repo: Python-venv (Supervisor und Fingerabdruck-GUI)
 ```
 
@@ -37,6 +39,7 @@ Updates auf dem Pi erfolgen direkt per `git pull` in `~/kuechendisplay/`.
 - [`docs/hardware.md`](docs/hardware.md) - Stromversorgung, Relais, Sensor- und Monitorverkabelung
 - [`docs/gpio-pinbelegung.md`](docs/gpio-pinbelegung.md) - komplette Belegung des 40-Pin-Headers
 - [`docs/mqtt.md`](docs/mqtt.md) - MQTT-Topics und Meldungen
+- [`docs/automatik.md`](docs/automatik.md) - Auto-Logout und automatischer Wechsel zur Diashow
 - [`docs/diashow.md`](docs/diashow.md) - Diashow-Modul
 - [`docs/kiosk-labwc.md`](docs/kiosk-labwc.md) - labwc/rc.xml-Konfiguration, Autostart, Taskleiste
 - [`docs/installation.md`](docs/installation.md) - Ersteinrichtung auf dem Raspberry Pi

@@ -24,8 +24,9 @@ Verbindungsaufbau `display/kueche/cmd/#`.
 
 | Topic | Payload | Wirkung |
 |---|---|---|
-| `display/kueche/cmd/mode` | `app` oder `slideshow` | Wechselt den Anzeigemodus. Bei `slideshow` wird der Kiosk-Tab zu `DIASHOW_URL` (`http://127.0.0.1:8090/`) navigiert; bei `app` wird die aktuell aktive App erneut aktiviert. |
-| `display/kueche/cmd/app` | `yuvomi`, `nodered` oder `custom:<url>` | Setzt die aktive App und `display_mode=app`. Bei `yuvomi` wird zusaetzlich der Familien-Login sichergestellt. `custom:` erlaubt eine beliebige URL, z. B. `custom:http://example.local/`. |
+| `display/kueche/cmd/mode` | `app` oder `slideshow` | Wechselt den Anzeigemodus. Bei `slideshow` wird ein angemeldeter individueller Yuvomi-Nutzer zuerst sofort abgemeldet (Rueckfall auf Familie), danach der Kiosk-Tab zu `DIASHOW_URL` (`http://127.0.0.1:8090/`) navigiert; bei `app` wird die aktuell aktive App erneut aktiviert. |
+| `display/kueche/cmd/app` | `yuvomi`, `nodered` oder `custom:<url>` | Setzt die aktive App und `display_mode=app`. Bei `yuvomi` wird zusaetzlich ein frisches Familien-Login ausgefuehrt. Bei `nodered` und `custom:` wird ein angemeldeter individueller Nutzer zuerst sofort abgemeldet. `custom:` erlaubt eine beliebige URL, z. B. `custom:http://example.local/`. |
+| `display/kueche/cmd/slideshow/timeout` | Ganzzahl Sekunden (`0` oder mindestens `30`) | Stellt die Inaktivitaetszeit bis zum automatischen Wechsel zur Diashow ein. `0` schaltet den automatischen Wechsel aus. Wird in `~/.kuechendisplay/slideshow_timeout.json` gespeichert und per `status/slideshow/timeout` bestaetigt. Ungueltige Werte werden ignoriert und als Warnung geloggt. Siehe [`automatik.md`](automatik.md). |
 | `display/kueche/cmd/display/power` | `true`, `false` oder `toggle` | Schaltet die Monitor-Stromversorgung ueber das Relais-Modul an GPIO17 (Pin 11). `false` = Relais zieht an, Monitor stromlos; `true` = Relais faellt ab, Monitor hat Strom. Kein `wlopm` und kein separater Prozess noetig; die Stromtrennung loest selbst ein HDMI-Hotplug-Ereignis aus. |
 | `display/kueche/cmd/wallmode` | `true` oder `false` | Aktiviert/deaktiviert den Wall Mode (setzt/loescht `localStorage`-Key `yuvomi-wall-mode` im Kiosk-Browser und laedt neu). |
 | `display/kueche/cmd/kindersicherung` | `true` oder `false` | Aktiviert/deaktiviert die Kindersicherung: Taster loesen nur noch die Notify-Meldung "Kindersicherung" aus, der Fingerabdrucksensor bleibt bei Beruehrung stromlos, und ein transparentes Overlay im Kiosk-Browser blockiert alle Touch-/Klick-Eingaben (der Bildschirm zeigt weiterhin normal an, was gerade aufgerufen ist). `cmd/button/map` bleibt auch bei aktiver Kindersicherung nutzbar. Startet nach jedem Neustart des Supervisors immer im Zustand `false` (keine Persistenz). Das Ein-/Ausschalten selbst wird per `cmd/notify` quittiert. |
@@ -33,6 +34,14 @@ Verbindungsaufbau `display/kueche/cmd/#`.
 | `display/kueche/cmd/notify/clear` | beliebig (z. B. leer) | Blendet das Notification-Overlay sofort aus. |
 | `display/kueche/cmd/button/map` | JSON, z. B. `{"key":"2_long","topic":"cmd/mode","payload":"slideshow"}` | Belegt einen Taster (`key` = `1`-`4` + `_short`/`_long`) neu: Taste loest kuenftig eine Publish-Nachricht auf `topic` (relativ zu `display/kueche/`) mit `payload` aus. Persistiert unter `~/.kuechendisplay/button_map.json` und wird sofort per `status/button/map` erneut veroeffentlicht. Funktioniert unabhaengig vom Zustand der Kindersicherung. |
 | `display/kueche/cmd/user` | `username:password` | Manueller Test-Login: meldet den angegebenen Yuvomi-Nutzer an (ohne Doppelpunkt wird die Nachricht ignoriert und eine Warnung geloggt). |
+
+### Aktivitaet und Timer
+
+MQTT-Nachrichten setzen den Auto-Logout individueller Nutzer **nicht**
+zurueck; dieser reagiert nur auf Touch im Kiosk-Browser. Den Timer fuer den
+automatischen Wechsel zur Diashow setzen Kommandos auf `cmd/#` zurueck, mit
+Ausnahme von `cmd/notify`, `cmd/notify/clear`, `cmd/button/map` und
+`cmd/slideshow/timeout`. Details siehe [`automatik.md`](automatik.md).
 
 ### Beispiele
 
@@ -42,6 +51,10 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -m slideshow
 
 # Zurueck zur App-Ansicht
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -m app
+
+# Automatischen Wechsel zur Diashow nach 15 Minuten bzw. gar nicht
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/slideshow/timeout' -m 900
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/slideshow/timeout' -m 0
 
 # Node-RED-Dashboard aktivieren
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/app' -m nodered
@@ -137,7 +150,8 @@ MQTT-Meldungen und bleibt eigenstaendig nutzbar.
 | Topic | Payload | Zweck |
 |---|---|---|
 | `display/kueche/status/health` (retain, LWT) | JSON `{"online": true/false, "ts"/"reason": ...}` | Heartbeat alle `HEARTBEAT_INTERVAL_SECONDS` (30s) sowie Last-Will bei Verbindungsverlust bzw. sauberem Shutdown. |
-| `display/kueche/status/state` (retain) | JSON `{"display_power": true/false, "display_mode":"app/slideshow", "active_app":"...", "active_user":"...", "wall_mode": true/false, "child_lock": true/false}` | Gesamtzustand des Displays, aktualisiert bei jeder relevanten Aenderung. |
+| `display/kueche/status/state` (retain) | JSON `{"display_power": true/false, "display_mode":"app/slideshow", "active_app":"...", "active_user":"...", "wall_mode": true/false, "child_lock": true/false, "slideshow_timeout": 600}` | Gesamtzustand des Displays, aktualisiert bei jeder relevanten Aenderung. `slideshow_timeout` in Sekunden, `0` = automatischer Wechsel zur Diashow aus. |
+| `display/kueche/status/slideshow/timeout` (retain) | Ganzzahl Sekunden | Aktueller Diashow-Timeout (identisch zu `slideshow_timeout` in `status/state`); wird bei jeder Zustandsaenderung neu veroeffentlicht. |
 | `display/kueche/status/kindersicherung` (retain) | `true` / `false` | Aktueller Zustand der Kindersicherung (identisch zu `child_lock` in `status/state`); wird bei jedem Start des Supervisors explizit auf `false` gesetzt, unabhaengig von einem evtl. stehen gebliebenen retained Wert. |
 | `display/kueche/status/button/map` (retain) | JSON aller vier Tastenbelegungen | Aktuelle Button-Map, wird bei Verbindungsaufbau und nach jeder Aenderung per `cmd/button/map` neu veroeffentlicht. |
 
@@ -160,6 +174,7 @@ gespeicherten Button-Map muessen Payloads wie `on` fuer `cmd/wallmode` oder
 ```bash
 mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/status/state' -C 1 -W 3 -v
 mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/status/health' -C 1 -W 3 -v
+mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/status/slideshow/timeout' -C 1 -W 3 -v
 mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/status/kindersicherung' -C 1 -W 3 -v
 mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/status/button/map' -C 1 -W 3 -v
 ```
@@ -187,7 +202,8 @@ Eigener MQTT-Client mit Praefix `display/kueche/diashow` (siehe
 `slideshow/config.json`, Schluessel `mqtt.topic_prefix`). Steuert
 ausschliesslich Inhalt/Tempo der Diashow selbst - unabhaengig davon, ob sie
 gerade sichtbar ist (Sichtbarkeit wird ueber `cmd/mode` des Supervisors
-gesteuert, siehe oben).
+gesteuert, siehe oben; der automatische Wechsel ueber
+`cmd/slideshow/timeout`).
 
 | Topic | Richtung | Payload | Zweck |
 |---|---|---|---|
@@ -234,4 +250,6 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/mode' -m app
 `slideshow/slideshow_service.py`, `docs/diashow.md`, `docs/hardware.md`).
 Display-Power (Relais an GPIO17), Kindersicherung und die Fehlermeldungen des
 Fingerabdrucksensors laufen direkt im Haupt-Supervisor.
-Markdown-Rendering in `notification_overlay.py` ergaenzt am 10.10.2026.*
+Markdown-Rendering in `notification_overlay.py` ergaenzt am 10.10.2026.
+Auto-Logout per Touch, Diashow-Timeout (`cmd/slideshow/timeout`) und
+Direkt-Logout ergaenzt am 15.10.2026 (siehe `docs/automatik.md`).*
