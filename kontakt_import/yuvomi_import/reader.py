@@ -4,6 +4,7 @@ Zwei Layouts werden erkannt:
   * Mit Kopfzeile: Spaltennamen werden ueber ALIASES zugeordnet.
   * Ohne Kopfzeile: festes Layout der Adressliste (POSITIONAL).
 Komplett leere Zeilen bleiben erhalten (Leerstring-Dict), weil sie Haushaltsbloecke trennen.
+Nicht zugeordnete Spalten der Kopfzeile stehen in rows[0]["_unmapped"] (der Mapper meldet sie als Hinweis).
 """
 from __future__ import annotations
 
@@ -23,15 +24,15 @@ POSITIONAL = FIELDS
 ALIASES: dict[str, list[str]] = {
     "last_name": ["nachname", "name", "familienname", "last_name", "lastname"],
     "first_name": ["vorname", "vornamen", "first_name", "firstname"],
-    "birthday": ["geburtstag", "geburtsdatum", "birthday", "bday"],
-    "street": ["strasse", "straße", "street", "adresse"],
+    "birthday": ["geburtstag", "geburtsdatum", "geburtstage", "birthday", "bday"],
+    "street": ["strasse", "straße", "strasse und hausnummer", "street", "adresse"],
     "postal_code": ["plz", "postleitzahl", "postal_code", "zip"],
-    "city": ["ort", "stadt", "city"],
-    "phone_home": ["telefon", "festnetz", "tel", "phone", "phone_home"],
-    "email": ["email", "e-mail", "mail"],
-    "phone_mobile": ["mobil", "handy", "mobile", "phone_mobile"],
+    "city": ["ort", "stadt", "wohnort", "city"],
+    "phone_home": ["telefon", "festnetz", "festnetznummer", "telefonnummer", "tel", "phone", "phone_home"],
+    "email": ["email", "e-mail", "mail", "emailadresse", "e-mailadresse", "mailadresse"],
+    "phone_mobile": ["mobil", "mobilnummer", "handy", "handynummer", "mobiltelefon", "mobile", "phone_mobile"],
     "flag": ["flag", "kennzeichen"],
-    "note": ["notiz", "notizen", "bemerkung", "note", "notes"],
+    "note": ["notiz", "notizen", "bemerkung", "bemerkungen", "note", "notes"],
     "category": ["kategorie", "kategorien", "category", "tag", "tags", "gruppe"],
 }
 
@@ -102,9 +103,11 @@ def read_table(path: str | Path, sheet: str | None = None) -> list[dict[str, Any
         return []
 
     header = _header_map(rows[0])
+    unmapped = ""
     if header:
         body, mapping = rows[1:], header
         first_line = 2
+        unmapped = ", ".join(str(c) for i, c in enumerate(rows[0]) if str(c).strip() and i not in header)
     else:
         body, mapping = rows, dict(enumerate(POSITIONAL))
         first_line = 1
@@ -117,4 +120,6 @@ def read_table(path: str | Path, sheet: str | None = None) -> list[dict[str, Any
                 rec[field] = row[idx]
         rec["_line"] = n
         out.append(rec)
+    if out and unmapped:
+        out[0]["_unmapped"] = unmapped
     return out

@@ -1,9 +1,10 @@
 """Tabellenzeile -> yuvomi-Kontakt-Payload (POST/PUT /api/v1/contacts).
 
 Felder laut server/routes/contacts.js: firstName, lastName, category, birthday (YYYY-MM-DD),
-notes, phones[], emails[], addresses[] (jeweils mit Pflichtfeld label; isPrimary optional).
+birthday_year_unknown, notes, phones[], emails[], addresses[] (jeweils mit Pflichtfeld label; isPrimary optional).
 Grenzen: max. 20 Eintraege je Liste, Label <= 50, Telefon <= 100, E-Mail <= 255 Zeichen.
 yuvomi kennt genau EINE Kategorie je Kontakt; weitere Eintraege einer Zelle ("A; B") landen in den Notizen.
+Geburtstag ohne Jahr ("08.11." oder "8.11"): birthday_year_unknown=true, yuvomi ersetzt das Jahr durch einen Platzhalter.
 """
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ from typing import Any
 EMAIL_RE = re.compile(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+")
 DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%d %H:%M:%S", "%d.%m.%y")
 CATEGORY_SPLIT_RE = re.compile(r"[;,|]")
+PARTIAL_DATE_RE = re.compile(r"^\s*(\d{1,2})\.\s*(\d{1,2})\.?\s*$")
+PLACEHOLDER_YEAR = 2000  # Schaltjahr, damit 29.02. gueltig bleibt
 
 
 @dataclass
@@ -48,6 +51,17 @@ def parse_date(v: Any) -> tuple[str | None, str | None]:
         except ValueError:
             pass
     return None, f"Geburtstag nicht lesbar: {s!r}"
+
+
+def parse_partial_date(v: Any) -> str | None:
+    """'08.11.' -> '2000-11-08' (Jahr = Platzhalter); None, wenn kein Tag.Monat-Format."""
+    m = PARTIAL_DATE_RE.match(v) if isinstance(v, str) else None
+    if not m:
+        return None
+    try:
+        return date(PLACEHOLDER_YEAR, int(m.group(2)), int(m.group(1))).isoformat()
+    except ValueError:
+        return None
 
 
 def clean_postal(v: Any) -> str:
@@ -119,11 +133,16 @@ def map_rows(rows: list[dict[str, Any]], opts: Options | None = None) -> list[Ma
             notes.append("Weitere Kategorien: " + ", ".join(cats[1:]))
             warnings.append("yuvomi kennt nur eine Kategorie je Kontakt - Rest in Notizen")
 
-        bday, werr = parse_date(row["birthday"])
-        if bday:
-            payload["birthday"] = bday
-        if werr:
-            warnings.append(werr)
+        partial = parse_partial_date(row["birthday"])
+        if partial:
+            payload["birthday"] = partial
+            payload["birthday_year_unknown"] = True
+        else:
+            bday, werr = parse_date(row["birthday"])
+            if bday:
+                payload["birthday"] = bday
+            if werr:
+                warnings.append(werr)
 
         phones = []
         for key, label in (("phone_home", "Festnetz"), ("phone_mobile", "Mobil")):
@@ -165,6 +184,9 @@ def map_rows(rows: list[dict[str, Any]], opts: Options | None = None) -> list[Ma
             payload["notes"] = "\n".join(notes)
 
         result.append(Mapped(row["_line"], payload, warnings))
+
+    if rows and rows[0].get("_unmapped") and result:
+        result[0].warnings.append("Spalten nicht zugeordnet (werden ignoriert): " + str(rows[0]["_unmapped"]))
     return result
 
 
