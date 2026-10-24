@@ -1,0 +1,177 @@
+"""Tabellenzeile -> yuvomi-Kontakt-Payload (POST/PUT /api/v1/contacts).
+
+Felder laut server/routes/contacts.js: firstName, lastName, category, birthday (YYYY-MM-DD),
+notes, phones[], emails[], addresses[] (jeweils mit Pflichtfeld label; isPrimary optional).
+Grenzen: max. 20 Eintraege je Liste, Label <= 50, Telefon <= 100, E-Mail <= 255 Zeichen.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from typing import Any
+
+EMAIL_RE = re.compile(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+")
+DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%d %H:%M:%S", "%d.%m.%y")
+
+
+@dataclass
+class Options:
+    category: str | None = None
+    inherit_last_name: bool = True
+    inherit_address: bool = False
+
+
+@dataclass
+class Mapped:
+    line: int
+    payload: dict[str, Any]
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def display(self) -> str:
+        return f"{self.payload.get('firstName', '')} {self.payload.get('lastName', '')}".strip()
+
+
+def parse_date(v: Any) -> tuple[str | None, str | None]:
+    if v in ("", None):
+        return None, None
+    if isinstance(v, (date, datetime)):
+        d = v.date() if isinstance(v, datetime) else v
+        return d.isoformat(), None
+    s = str(v).strip()
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).date().isoformat(), None
+        except ValueError:
+            pass
+    return None, f"Geburtstag nicht lesbar: {s!r}"
+
+
+def clean_postal(v: Any) -> str:
+    s = str(v or "").strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.zfill(5) if s.isdigit() and len(s) < 5 else s
+
+
+def split_emails(raw: str) -> tuple[list[str], str]:
+    """Adressen herausloesen; uebrig bleibender Text (z. B. '(gemeinsam)') wird Hinweis."""
+    found = EMAIL_RE.findall(raw)
+    rest = EMAIL_RE.sub(" ", raw)
+    rest = re.sub(r"[;,()\s]+", " ", rest).strip()
+    return found, rest
+
+
+def _row_empty(row: dict[str, Any]) -> bool:
+    return not any(str(row.get(k, "")).strip() for k in row if not k.startswith("_"))
+
+
+def map_rows(rows: list[dict[str, Any]], opts: Options | None = None) -> list[Mapped]:
+    opts = opts or Options()
+    result: list[Mapped] = []
+    block_last = ""
+    block_addr: dict[str, str] | None = None
+
+    for row in rows:
+        if _row_empty(row):
+            block_last, block_addr = "", None
+            continue
+
+        warnings: list[str] = []
+        first = str(row["first_name"]).strip()
+        last = str(row["last_name"]).strip()
+        if last:
+            block_last = last
+        elif opts.inherit_last_name and block_last:
+            last = block_last
+        own_last = str(row["last_name"]).strip()
+        if not first and not own_last and result and result[-1].payload and block_last:
+            _merge_into_previous(result[-1], row, warnings)
+            continue
+        if not first and not last:
+            result.append(Mapped(row["_line"], {}, ["Zeile ohne Namen uebersprungen"]))
+            continue
+
+        notes: list[str] = []
+        note = str(row["note"]).strip()
+        if note:
+            notes.append(note)
+
+        payload: dict[str, Any] = {}
+        if first:
+            payload["firstName"] = first
+        if last:
+            payload["lastName"] = last
+        if opts.category:
+            payload["category"] = opts.category
+
+        bday, werr = parse_date(row["birthday"])
+        if bday:
+            payload["birthday"] = bday
+        if werr:
+            warnings.append(werr)
+
+        phones = []
+        for key, label in (("phone_home", "Festnetz"), ("phone_mobile", "Mobil")):
+            val = str(row[key]).strip()
+            if val:
+                phones.append({"label": label, "value": val[:100], "isPrimary": not phones})
+                if len(val) > 100:
+                    warnings.append(f"{label}-Nummer auf 100 Zeichen gekuerzt")
+        if phones:
+            payload["phones"] = phones
+
+        emails = []
+        addrs, rest = split_emails(str(row["email"]))
+        for a in addrs:
+            emails.append({"label": "Privat", "value": a, "isPrimary": not emails})
+        if rest:
+            notes.append(f"E-Mail-Hinweis: {rest}")
+        if str(row["email"]).strip() and not addrs:
+            warnings.append(f"Keine gueltige E-Mail: {row['email']!r}")
+            notes.append(f"E-Mail (roh): {row['email']}")
+        if emails:
+            payload["emails"] = emails
+
+        addr = {
+            "street": str(row["street"]).strip(),
+            "postalCode": clean_postal(row["postal_code"]),
+            "city": str(row["city"]).strip(),
+        }
+        if any(addr.values()):
+            block_addr = addr
+        elif opts.inherit_address and block_addr:
+            addr = block_addr
+        if any(addr.values()):
+            payload["addresses"] = [
+                {"label": "Zuhause", "isPrimary": True, **{k: v for k, v in addr.items() if v}}
+            ]
+
+        if notes:
+            payload["notes"] = "\n".join(notes)
+
+        result.append(Mapped(row["_line"], payload, warnings))
+    return result
+
+
+def name_key(first: str, last: str) -> frozenset[str]:
+    """Reihenfolge-unabhaengiger Namensschluessel fuer den Abgleich mit Bestandskontakten."""
+    tokens = re.findall(r"\w+", f"{first} {last}".casefold())
+    return frozenset(tokens)
+
+
+def _merge_into_previous(prev: Mapped, row: dict[str, Any], warnings: list[str]) -> None:
+    """Zeile ohne Vor-/Nachnamen (z. B. gemeinsame Familien-E-Mail) -> an vorherigen Kontakt haengen."""
+    addrs, rest = split_emails(str(row["email"]))
+    p = prev.payload
+    for a in addrs:
+        p.setdefault("emails", []).append({"label": "Gemeinsam", "value": a, "isPrimary": not p.get("emails")})
+    extra = [t for t in (str(row["note"]).strip(), f"E-Mail-Hinweis: {rest}" if rest else "") if t]
+    for key, label in (("phone_home", "Festnetz"), ("phone_mobile", "Mobil")):
+        val = str(row[key]).strip()
+        if val:
+            p.setdefault("phones", []).append({"label": label, "value": val[:100], "isPrimary": not p.get("phones")})
+    if extra:
+        p["notes"] = "\n".join(filter(None, [p.get("notes", ""), *extra]))
+    prev.warnings.append(f"Zeile {row['_line']} an diesen Kontakt angehaengt")
