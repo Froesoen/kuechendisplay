@@ -14,9 +14,10 @@ from typing import Any
 
 FIELDS = [
     "last_name", "first_name", "birthday", "street", "postal_code", "city",
-    "phone_home", "email", "phone_mobile", "flag", "note",
+    "phone_home", "email", "phone_mobile", "flag", "note", "category",
 ]
 # Layout der vorhandenen Adressliste (Adressen_*.xlsx), ohne Kopfzeile.
+# Spalte 12 (Kategorie) ist optional und fehlt in aelteren Tabellen.
 POSITIONAL = FIELDS
 
 ALIASES: dict[str, list[str]] = {
@@ -31,6 +32,7 @@ ALIASES: dict[str, list[str]] = {
     "phone_mobile": ["mobil", "handy", "mobile", "phone_mobile"],
     "flag": ["flag", "kennzeichen"],
     "note": ["notiz", "notizen", "bemerkung", "note", "notes"],
+    "category": ["kategorie", "kategorien", "category", "tag", "tags", "gruppe"],
 }
 
 
@@ -74,6 +76,17 @@ def _header_map(first_row: list[Any]) -> dict[int, str] | None:
                if isinstance(c, str) and _norm_header(c) in lookup}
     names = set(mapping.values())
     return mapping if {"first_name", "last_name"} & names and len(mapping) >= 2 else None
+
+
+def sheet_names(path: str | Path) -> list[str]:
+    """Tabellenblaetter einer xlsx-Datei (leer bei CSV)."""
+    path = Path(path)
+    if path.suffix.lower() not in (".xlsx", ".xlsm"):
+        return []
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True)
+    return list(wb.sheetnames)
 
 
 def read_table(path: str | Path, sheet: str | None = None) -> list[dict[str, Any]]:

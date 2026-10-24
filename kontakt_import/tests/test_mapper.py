@@ -1,6 +1,6 @@
 from datetime import date
 
-from yuvomi_import.mapper import Options, map_rows, clean_postal, split_emails
+from yuvomi_import.mapper import Options, map_rows, clean_postal, split_emails, split_categories
 from yuvomi_import.reader import FIELDS
 
 
@@ -62,3 +62,14 @@ def test_nameless_row_merges_into_previous():
     assert len(m) == 1
     assert [e["value"] for e in m[0].payload["emails"]] == ["a@b.de", "familie@arcor.de"]
     assert "gemeinsam" in m[0].payload["notes"]
+
+
+def test_category_from_row_beats_default_and_extra_goes_to_notes():
+    rows = [row(1, last_name="A", first_name="B", category="Familie; Weihnachtskarte, Freunde"),
+            row(2, last_name="C", first_name="D")]
+    m = map_rows(rows, Options(category="Sonstige"))
+    assert m[0].payload["category"] == "Familie"
+    assert "Weihnachtskarte, Freunde" in m[0].payload["notes"]
+    assert m[0].warnings
+    assert m[1].payload["category"] == "Sonstige"
+    assert split_categories(" a ; b|c,, ") == ["a", "b", "c"]

@@ -1,33 +1,63 @@
 # kontakt_import
 
 Überträgt jede Zeile einer Adress-Tabelle (`.xlsx`/`.csv`) 1:1 als Kontakt nach [yuvomi](https://github.com/ulsklyc/yuvomi)
-(`POST /api/v1/contacts`). **Standard ist ein Dry-Run** – geschrieben wird nur mit `--apply`.
+(`POST /api/v1/contacts`). **Vorschau (Dry-Run) ist der Standard** – geschrieben wird nur beim bewussten Import.
 
 ## Einrichtung
 ```bash
 cd kontakt_import
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # URL + API-Token eintragen
+sudo apt install python3-tk        # nur für die GUI
 ```
-Token in yuvomi erzeugen (Scopes `contacts:read`, `contacts:write`).
 
-## Benutzung
-```bash
-python -m yuvomi_import Adressen_Giese.xlsx --offline           # nur Mapping prüfen
-python -m yuvomi_import Adressen_Giese.xlsx                     # Dry-Run gegen yuvomi (liest Bestand)
-python -m yuvomi_import Adressen_Giese.xlsx --apply --category Familie --create-category
-python -m yuvomi_import Adressen_Giese.xlsx --apply --update    # Bestand (gleicher Name) per PUT überschreiben
+### API-Token in der secrets.json
+Der Token liegt – wie alle Zugangsdaten des Projekts – in `~/.kuechendisplay/secrets.json` (nicht im Repo).
+Diese drei Schlüssel zusätzlich zu den vorhandenen Einträgen ergänzen (Vorlage: `secrets.json.example`):
+```json
+"yuvomi_url": "https://yuvomi.example.lan",
+"yuvomi_api_token": "yuvomi_...",
+"yuvomi_verify_tls": true
 ```
-Vor dem ersten `--apply`: yuvomi-Backup/Datenbank sichern. Report je Lauf unter `reports/*.csv`.
+```bash
+chmod 600 ~/.kuechendisplay/secrets.json
+```
+Token in yuvomi mit den Scopes `contacts:read` und `contacts:write` erzeugen. Ein anderer Pfad geht über das GUI-Feld,
+`--secrets-file` oder die Umgebungsvariable `YUVOMI_SECRETS_FILE`. Der Token wird nie geloggt oder im Report gespeichert.
+
+## GUI
+```bash
+./start_gui.sh            # oder: python -m yuvomi_import   (ohne Argumente)
+```
+Ablauf: Tabelle wählen → optional Blatt/Optionen → **„Vorschau (Dry-Run)“** → Ergebnistabelle prüfen →
+**„Importieren“** (erst freigeschaltet, wenn die Vorschau mit denselben Einstellungen fehlerfrei lief; vorher Rückfrage).
+Zusätzlich: „Verbindung testen“, „Kategorien anzeigen“ (Keys der vorhandenen yuvomi-Kategorien) und „Report-Ordner öffnen“.
+
+## Kommandozeile
+```bash
+python -m yuvomi_import Adressen_Giese.xlsx --offline                # nur Tabelle prüfen
+python -m yuvomi_import Adressen_Giese.xlsx                          # Dry-Run gegen yuvomi (liest Bestand)
+python -m yuvomi_import Adressen_Giese.xlsx --apply --create-category
+python -m yuvomi_import Adressen_Giese.xlsx --apply --update         # Bestand (gleicher Name) per PUT überschreiben
+```
+Vor dem ersten Import: yuvomi-Backup/Datenbank sichern. Je Lauf entsteht ein Report `reports/*.csv`.
 
 ## Tabellenlayout
-Mit Kopfzeile (Aliase: Nachname, Vorname, Geburtstag, Straße, PLZ, Ort, Telefon, E-Mail, Mobil, Notiz) **oder**
-ohne Kopfzeile im Layout der bisherigen Liste:
+Mit Kopfzeile (Aliase: Nachname, Vorname, Geburtstag, Straße, PLZ, Ort, Telefon, E-Mail, Mobil, Notiz, **Kategorie**/Tag/Gruppe)
+**oder** ohne Kopfzeile in dieser Spaltenreihenfolge:
 
-| Spalte | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| Feld | Nachname | Vorname | Geburtstag | Straße+Nr | PLZ | Ort | Festnetz | E-Mail | Mobil | (ignoriert) | Notiz |
+| Spalte | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Feld | Nachname | Vorname | Geburtstag | Straße+Nr | PLZ | Ort | Festnetz | E-Mail | Mobil | (ignoriert) | Notiz | Kategorie (optional) |
+
+## Kategorien
+yuvomi kennt **eine** Kategorie je Kontakt (keine Mehrfach-Tags).
+- Die Zelle darf den Kategorie-**Key** oder den **Namen** enthalten (Groß-/Kleinschreibung egal). Die mitgelieferten
+  yuvomi-Kategorien haben übersetzte Standardnamen und werden daher über ihren Key angesprochen – siehe „Kategorien anzeigen“.
+- Steht in der Zelle mehr als ein Eintrag (`Familie; Weihnachtskarte`), wird der erste die Kategorie, der Rest landet in den Notizen.
+- „Standardkategorie“ gilt für Zeilen ohne eigene Kategorie, sonst nimmt yuvomi `misc`.
+- Unbekannte Kategorien werden nur mit „Fehlende Kategorien anlegen“ (`--create-category`) und nur beim Import angelegt;
+  in der Vorschau erscheint der Hinweis „würde angelegt“. Ohne diese Option fällt der Kontakt auf die Standardkategorie zurück.
 
 ## Regeln
 - Leerer Nachname → Nachname der Zeile darüber im selben Block; eine Leerzeile beendet den Block (`--no-inherit-last-name` schaltet das ab).

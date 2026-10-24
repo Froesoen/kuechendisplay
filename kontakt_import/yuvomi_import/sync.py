@@ -1,8 +1,8 @@
-"""Abgleich Tabelle <-> yuvomi: anlegen, optional aktualisieren, nie loeschen."""
+"""Abgleich Tabelle <-> yuvomi: Kategorien aufloesen, anlegen, optional aktualisieren, nie loeschen."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .client import YuvomiClient, YuvomiError
 from .mapper import Mapped, name_key
@@ -15,6 +15,7 @@ class Result:
     action: str  # create | update | skip-exists | skip-invalid | duplicate-in-table | error
     contact_id: Any = ""
     detail: str = ""
+    category: str = ""
 
 
 def _existing_index(client: YuvomiClient | None) -> dict[frozenset[str], dict[str, Any]]:
@@ -28,16 +29,33 @@ def _existing_index(client: YuvomiClient | None) -> dict[frozenset[str], dict[st
     return idx
 
 
-def ensure_category(client: YuvomiClient, name: str, create: bool) -> str:
-    """Gibt den Kategorie-Key zurueck (Key oder Anzeigename akzeptiert)."""
+def resolve_categories(client: YuvomiClient, items: list[Mapped], *, create: bool, apply: bool,
+                       log: Callable[[str], None] = print) -> None:
+    """Ersetzt Kategorienamen im Payload durch yuvomi-Keys (Treffer ueber Key oder Name).
+
+    Unbekannte Kategorie: mit create=True anlegen (nur bei apply), sonst Warnung und Standardkategorie.
+    """
+    lookup: dict[str, str] = {}
     for c in client.list_categories():
-        if name.casefold() in {str(c["key"]).casefold(), str(c.get("name") or "").casefold()}:
-            return c["key"]
-    if not create:
-        keys = ", ".join(c["key"] for c in client.list_categories())
-        raise SystemExit(f"Kategorie {name!r} existiert nicht (vorhanden: {keys}). "
-                         "Mit --create-category anlegen lassen.")
-    return client.create_category(name)["key"]
+        lookup[str(c["key"]).casefold()] = c["key"]
+        if c.get("name"):
+            lookup[str(c["name"]).casefold()] = c["key"]
+
+    for m in items:
+        name = m.payload.get("category")
+        if not name:
+            continue
+        k = name.casefold()
+        if k not in lookup and create and apply:
+            lookup[k] = client.create_category(name)["key"]
+            log(f"Kategorie angelegt: {name} -> {lookup[k]}")
+        if k in lookup:
+            m.payload["category"] = lookup[k]
+        elif create:
+            m.warnings.append(f"Kategorie {name!r} wuerde angelegt")
+        else:
+            m.warnings.append(f"Kategorie {name!r} existiert nicht - Standardkategorie")
+            del m.payload["category"]
 
 
 def run_sync(items: list[Mapped], client: YuvomiClient | None, *, apply: bool,
@@ -47,29 +65,30 @@ def run_sync(items: list[Mapped], client: YuvomiClient | None, *, apply: bool,
     results: list[Result] = []
 
     for m in items:
+        cat = str(m.payload.get("category", ""))
+        warn = "; ".join(m.warnings)
         if not m.payload:
-            results.append(Result(m.line, "", "skip-invalid", detail="; ".join(m.warnings)))
+            results.append(Result(m.line, "", "skip-invalid", detail=warn))
             continue
         key = name_key(m.payload.get("firstName", ""), m.payload.get("lastName", ""))
-        warn = "; ".join(m.warnings)
         if key in seen:
-            results.append(Result(m.line, m.display, "duplicate-in-table", detail=warn))
+            results.append(Result(m.line, m.display, "duplicate-in-table", detail=warn, category=cat))
             continue
         seen.add(key)
 
         found = existing.get(key)
         try:
             if found and not update:
-                results.append(Result(m.line, m.display, "skip-exists", found["id"], warn))
+                results.append(Result(m.line, m.display, "skip-exists", found["id"], warn, cat))
             elif found:
                 if apply:
                     client.update_contact(found["id"], m.payload)
-                results.append(Result(m.line, m.display, "update", found["id"], warn))
+                results.append(Result(m.line, m.display, "update", found["id"], warn, cat))
             else:
                 cid = ""
                 if apply:
                     cid = client.create_contact(m.payload)["id"]
-                results.append(Result(m.line, m.display, "create", cid, warn))
+                results.append(Result(m.line, m.display, "create", cid, warn, cat))
         except YuvomiError as e:
-            results.append(Result(m.line, m.display, "error", detail=f"{e} {warn}".strip()))
+            results.append(Result(m.line, m.display, "error", detail=f"{e} {warn}".strip(), category=cat))
     return results

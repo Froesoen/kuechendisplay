@@ -3,6 +3,7 @@
 Felder laut server/routes/contacts.js: firstName, lastName, category, birthday (YYYY-MM-DD),
 notes, phones[], emails[], addresses[] (jeweils mit Pflichtfeld label; isPrimary optional).
 Grenzen: max. 20 Eintraege je Liste, Label <= 50, Telefon <= 100, E-Mail <= 255 Zeichen.
+yuvomi kennt genau EINE Kategorie je Kontakt; weitere Eintraege einer Zelle ("A; B") landen in den Notizen.
 """
 from __future__ import annotations
 
@@ -13,11 +14,12 @@ from typing import Any
 
 EMAIL_RE = re.compile(r"[\w.+'-]+@[\w-]+(?:\.[\w-]+)+")
 DATE_FORMATS = ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%d %H:%M:%S", "%d.%m.%y")
+CATEGORY_SPLIT_RE = re.compile(r"[;,|]")
 
 
 @dataclass
 class Options:
-    category: str | None = None
+    category: str | None = None  # Standardkategorie fuer Zeilen ohne eigene Kategorie
     inherit_last_name: bool = True
     inherit_address: bool = False
 
@@ -63,6 +65,10 @@ def split_emails(raw: str) -> tuple[list[str], str]:
     return found, rest
 
 
+def split_categories(raw: Any) -> list[str]:
+    return [c.strip() for c in CATEGORY_SPLIT_RE.split(str(raw or "")) if c.strip()]
+
+
 def _row_empty(row: dict[str, Any]) -> bool:
     return not any(str(row.get(k, "")).strip() for k in row if not k.startswith("_"))
 
@@ -103,8 +109,15 @@ def map_rows(rows: list[dict[str, Any]], opts: Options | None = None) -> list[Ma
             payload["firstName"] = first
         if last:
             payload["lastName"] = last
-        if opts.category:
+
+        cats = split_categories(row.get("category", ""))
+        if cats:
+            payload["category"] = cats[0]
+        elif opts.category:
             payload["category"] = opts.category
+        if len(cats) > 1:
+            notes.append("Weitere Kategorien: " + ", ".join(cats[1:]))
+            warnings.append("yuvomi kennt nur eine Kategorie je Kontakt - Rest in Notizen")
 
         bday, werr = parse_date(row["birthday"])
         if bday:
