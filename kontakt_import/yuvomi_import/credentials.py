@@ -1,6 +1,6 @@
 """Zugangsdaten aus der zentralen secrets.json des Projekts (nicht im Repo).
 
-Standardpfad wie im restlichen kuechendisplay-Projekt: ~/.kuechendisplay/secrets.json
+Standardpfad: /home/christoph/Dokumente/Github/.kuechendisplay/secrets.json
 Abweichender Pfad: Umgebungsvariable YUVOMI_SECRETS_FILE oder Parameter/GUI-Feld.
 
 Benoetigte Schluessel (zusaetzlich zu den bestehenden Eintraegen der Datei):
@@ -15,7 +15,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_SECRETS_FILE = Path.home() / ".kuechendisplay" / "secrets.json"
+DEFAULT_SECRETS_FILE = Path("/home/christoph/Dokumente/Github/.kuechendisplay/secrets.json")
 
 
 class SecretsError(RuntimeError):
