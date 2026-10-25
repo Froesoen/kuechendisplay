@@ -38,6 +38,7 @@ from config import (
     SLIDESHOW_TIMEOUT_MIN_SECONDS, load_slideshow_timeout, save_slideshow_timeout,
     DISPLAY_PREFERENCES, DIASHOW_URL,
     MONITOR_POWER_GPIO, CHILD_LOCK_NOTIFY_TEXT,
+    INDIVIDUAL_USER_CREDENTIALS,
 )
 from state import StateStore
 from kiosk_controller import KioskController, WallModeController, apply_display_preferences
@@ -108,6 +109,9 @@ class Supervisor:
 
         self._shutdown_event = threading.Event()
         self._last_general_activity = time.time()
+        # Die Kindersicherung wird nur beim ersten MQTT-Connect nach dem Start
+        # zurueckgesetzt, nicht bei jedem Reconnect.
+        self._child_lock_initialized = False
 
         # Relais-Modul (High-Level-Trigger) mit Monitor-Plus ueber COM/NC:
         # active_high=False kehrt die Logik um, damit on()/off() dem Monitor-
@@ -267,17 +271,34 @@ class Supervisor:
         self._publish_heartbeat()
         self._publish_state()
         self.button_mapper.publish_full_map()
-        # Kindersicherung startet nach jedem Neustart immer im Zustand
-        # "aus" - explizit setzen, damit ein evtl. stehen gebliebener
-        # retained Wert von vor einem Absturz/Neustart ueberschrieben wird.
-        self._set_child_lock(False, notify=False)
+        if not self._child_lock_initialized:
+            # Kindersicherung startet nach jedem Neustart des Supervisors
+            # immer im Zustand "aus" - explizit setzen, damit ein evtl.
+            # stehen gebliebener retained Wert von vor einem Absturz/Neustart
+            # ueberschrieben wird.
+            self._child_lock_initialized = True
+            self._set_child_lock(False, notify=False)
+        else:
+            # Reconnect (z. B. Broker-Neustart): aktuellen Zustand beibehalten,
+            # nur den retained Status erneut veroeffentlichen.
+            self._publish_child_lock_status()
+            log.info("MQTT-Reconnect - Kindersicherung bleibt unveraendert (%s)", self.state_store.state.child_lock)
 
     def _on_message(self, client, userdata, msg) -> None:
         topic = msg.topic
         payload = msg.payload.decode("utf-8", errors="replace")
-        log.info("MQTT empfangen: %s = %s", topic, payload)
-
         sub_topic = topic[len(MQTT_BASE_TOPIC):] if topic.startswith(MQTT_BASE_TOPIC) else topic
+
+        # Vom Broker wiederholte gespeicherte (retained) Nachrichten sind keine
+        # neuen Kommandos und wuerden sonst bei jedem (Re-)Connect erneut
+        # ausgefuehrt. Live gesendete Kommandos haben retain=False und sind
+        # davon nicht betroffen.
+        if msg.retain:
+            log.info("Retained Nachricht auf %s ignoriert", topic)
+            return
+
+        # cmd/user wird nie mit Payload protokolliert.
+        log.info("MQTT empfangen: %s = %s", topic, "<nicht protokolliert>" if sub_topic == "cmd/user" else payload)
 
         # Nur der Diashow-Timer wird durch MQTT-Kommandos zurueckgesetzt. Der
         # Inaktivitaets-Logout individueller Nutzer reagiert NICHT auf MQTT.
@@ -318,11 +339,24 @@ class Supervisor:
             elif sub_topic == "cmd/button/map":
                 self.button_mapper.on_config_message(payload)
             elif sub_topic == "cmd/user":
-                if ":" in payload:
-                    username, password = payload.split(":", 1)
-                    self.yuvomi_users.switch_user(username, password)
+                # Payload = Kennung eines individuellen Kontos (Schluessel in
+                # secrets.json -> individual_accounts, wie im Fingerprint-Mapping).
+                # Die Zugangsdaten liegen lokal; es wird kein Passwort per MQTT gesendet.
+                name = payload.strip()
+                if ":" in name:
+                    log.warning("cmd/user erwartet nur die Kennung (z. B. person_c), kein 'username:passwort' - ignoriert")
                 else:
-                    log.warning("cmd/user erwartet 'username:password' zum Testen")
+                    target = resolve_login_target(name)
+                    if target is None:
+                        log.warning(
+                            "cmd/user: unbekannte Kennung oder fehlende Zugangsdaten - bekannte Kennungen: %s",
+                            ", ".join(sorted(INDIVIDUAL_USER_CREDENTIALS)) or "keine",
+                        )
+                    else:
+                        display_name, username, password = target
+                        self.state_store.update(active_app="yuvomi", display_mode="app")
+                        self.yuvomi_users.switch_user(username, password)
+                        log.info("MQTT-Login: %s", display_name)
             elif sub_topic == "cmd/slideshow/timeout":
                 try:
                     timeout = int(payload.strip())
