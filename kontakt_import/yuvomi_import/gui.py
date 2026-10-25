@@ -39,7 +39,7 @@ class App(ttk.Frame):
         self.v_sheet = tk.StringVar()
         self.v_secrets = tk.StringVar(value=str(DEFAULT_SECRETS_FILE))
         self.v_default_cat = tk.StringVar()
-        self.v_update = tk.BooleanVar(value=False)
+        self.v_update = tk.BooleanVar(value=True)
         self.v_create_cat = tk.BooleanVar(value=False)
         self.v_inh_last = tk.BooleanVar(value=True)
         self.v_inh_addr = tk.BooleanVar(value=False)
