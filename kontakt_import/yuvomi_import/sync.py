@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .client import YuvomiClient, YuvomiError
-from .mapper import Mapped, name_key
+from .mapper import Mapped
+from .matching import find_existing, name_key
 
 
 @dataclass
@@ -76,7 +77,7 @@ def run_sync(items: list[Mapped], client: YuvomiClient | None, *, apply: bool,
             continue
         seen.add(key)
 
-        found = existing.get(key)
+        found = find_existing(existing, key)
         try:
             if found and not update:
                 results.append(Result(m.line, m.display, "skip-exists", found["id"], warn, cat))
