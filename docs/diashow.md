@@ -1,7 +1,8 @@
 # Diashow-Modul
 
 Zeigt Bilder von einem NAS-Ordner in zufaelliger Reihenfolge im Kiosk-Browser
-an. Geschwindigkeit und ein manueller Rescan sind per MQTT steuerbar. Bilder
+an. Geschwindigkeit, ein manueller Rescan und das Vor-/Zurueckblaettern sind
+per MQTT steuerbar; am Touchscreen blaettert man per Wischgeste. Bilder
 werden vor der Anzeige bei Bedarf automatisch auf max. 1920x1080 verkleinert;
 die Originaldatei im NAS-Ordner wird dabei ueberschrieben (im Ordner liegen
 laut Vorgabe nur Kopien, ein Ueberschreiben ist unkritisch).
@@ -18,10 +19,15 @@ Supervisor-Integration (Button 2) und verifiziertem Reboot-Verhalten.
 - **`slideshow/slideshow_service.py`**: durchsucht den Mount rekursiv, mischt
   die Playlist, prueft/verkleinert Bilder vor der Anzeige, kopiert das
   aktuelle Bild nach `slideshow/www/img/current.jpg` und meldet Status per
-  MQTT sowie in `slideshow/www/img/status.json`.
-- **`slideshow/www/index.html`**: einfache HTML/JS-Seite, die `current.jpg`
-  und `status.json` per Polling abruft und im Kiosk-Browser fullscreen
-  anzeigt.
+  MQTT sowie in `slideshow/www/img/status.json`. Der Dienst merkt sich die
+  Position in der Playlist und kann vor- und zurueckblaettern.
+- **Navigations-API**: kleiner HTTP-Endpunkt im Diashow-Dienst auf
+  `127.0.0.1:8091` (`POST /api/next`, `POST /api/prev`), den das Frontend bei
+  einer Wischgeste aufruft.
+- **`slideshow/www/index.html`**: einfache HTML/JS-Seite, die `status.json`
+  alle 500 ms abfragt, `current.jpg` bei geaendertem Bildzaehler `seq` laedt
+  und im Kiosk-Browser fullscreen anzeigt. Sie erkennt Wischgesten und ruft
+  die Navigations-API auf.
 - **Webserver**: liefert `slideshow/www` mit `python3 -m http.server` auf
   Port 8090 fuer den Kiosk-Browser aus.
 - **Supervisor-Integration**: `supervisor/config.py` definiert
@@ -39,13 +45,13 @@ Supervisor-Integration (Button 2) und verifiziertem Reboot-Verhalten.
 Diese Anleitung gilt fuer den Benutzer `christoph` und den Checkout unter
 `/home/christoph/kuechendisplay` (entspricht `~/kuechendisplay`).
 
-### 1. Branch auschecken
+### 1. Code aktualisieren
 
 ```bash
 cd ~/kuechendisplay
 git fetch origin
-git switch feature/diashow-modul
-git pull --ff-only origin feature/diashow-modul
+git switch main
+git pull --ff-only origin main
 ```
 
 ### 2. NAS-Zugangsdaten unter ~/.kuechendisplay anlegen
@@ -140,6 +146,12 @@ EOF
 chmod 600 slideshow/config.json
 ```
 
+Optional lassen sich die Adresse und der Port der Navigations-API mit den
+Schluesseln `api_host` (Standard `127.0.0.1`) und `api_port` (Standard `8091`)
+auf oberster Ebene der `config.json` aendern. Das Frontend ruft den Port
+`8091` auf; bei einem anderen Port muss die Konstante `API` in
+`slideshow/www/index.html` angepasst werden.
+
 Der Topic-Praefix `display/kueche/diashow` ist bewusst an den bestehenden
 Supervisor-Namensraum (`display/kueche/`) angeglichen, damit kein zweiter,
 davon abweichender MQTT-Namensraum entsteht.
@@ -163,6 +175,7 @@ Erwartete Ausgabe:
 
 ```text
 MQTT verbunden (reason_code=Success)
+Navigations-API laeuft auf http://127.0.0.1:8091
 Scan abgeschlossen: N Bilder gefunden
 Verkleinert: DATEINAME.jpg (...)
 ```
@@ -245,6 +258,49 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/slideshow/timeout' -m 0
 Details zu Aktivitaetsquellen und Zusammenspiel mit dem Auto-Logout stehen in
 [`automatik.md`](automatik.md).
 
+## Blaettern per Wischen und MQTT
+
+In der Diashow lassen sich Bilder manuell vor- und zurueckblaettern:
+
+| Bedienung | Wirkung |
+|---|---|
+| Wisch nach **links** am Touchscreen | naechstes Bild |
+| Wisch nach **rechts** am Touchscreen | vorheriges Bild |
+| MQTT `display/kueche/diashow/set/naechstes` | naechstes Bild |
+| MQTT `display/kueche/diashow/set/vorheriges` | vorheriges Bild |
+| `POST http://127.0.0.1:8091/api/next` bzw. `/api/prev` | naechstes bzw. vorheriges Bild |
+| Pfeiltasten / Maus ziehen (nur zum Testen am PC) | wie Wischen |
+
+Verhalten:
+
+- Eine Wischgeste zaehlt ab 60 Pixeln, wenn sie ueberwiegend horizontal ist
+  und weniger als eine Sekunde dauert.
+- Das Blaettern laeuft umlaufend. Nach dem letzten Bild beginnt die Liste
+  wieder von vorn bzw. beim Zurueckblaettern am Anfang beim letzten Bild.
+- Nach jedem manuellen Wechsel beginnt das Intervall neu: das Bild bleibt
+  wieder die volle Anzeigedauer stehen, bevor die Diashow automatisch
+  weiterschaltet.
+- Mehrere schnelle Wischgesten werden zusammengefasst; angezeigt wird das
+  Endbild. Zwischen Geste und neuem Bild liegen etwa 0,5 bis 1 Sekunde.
+- Das Wischen beendet die Diashow nicht; der Anzeigemodus bleibt
+  `slideshow`. Ein Touch setzt wie sonst den Timer fuer den automatischen
+  Wechsel zurueck (siehe [`automatik.md`](automatik.md)).
+- Bei aktiver Kindersicherung blockiert das Overlay den Touch; dann ist auch
+  das Wischen gesperrt. Die MQTT-Topics funktionieren weiterhin.
+- Ist die Diashow per `set/aktiv` pausiert, zeigt ein manueller Wechsel
+  trotzdem das naechste bzw. vorherige Bild; danach bleibt sie pausiert.
+
+Test:
+
+```bash
+curl -X POST http://127.0.0.1:8091/api/next
+curl -X POST http://127.0.0.1:8091/api/prev
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/naechstes' -m 1
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/vorheriges' -m 1
+```
+
+Im Journal erscheint pro Wechsel `Manuelle Navigation: +1` bzw. `-1`.
+
 ## MQTT-Schnittstelle (Diashow-Modul)
 
 | Topic | Richtung | Payload | Zweck |
@@ -252,14 +308,17 @@ Details zu Aktivitaetsquellen und Zusammenspiel mit dem Auto-Logout stehen in
 | `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` | Anzeigedauer pro Bild aendern (min. 2s) |
 | `display/kueche/diashow/set/rescan` | Eingang | beliebig, z. B. `1` | Loest einen Neu-Scan des NAS-Ordners aus |
 | `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow pausieren/fortsetzen |
-| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":...}` | Aktueller Zustand fuer Dashboards/Node-RED |
+| `display/kueche/diashow/set/naechstes` | Eingang | beliebig, z. B. `1` | Zum naechsten Bild blaettern |
+| `display/kueche/diashow/set/vorheriges` | Eingang | beliebig, z. B. `1` | Zum vorherigen Bild blaettern |
+| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":...}` | Aktueller Zustand fuer Dashboards/Node-RED. `seq` ist ein Bildzaehler, der bei jedem neuen Bild um 1 steigt (Startwert: Unix-Zeit beim Dienststart). |
 
 Zur Abgrenzung: Das Umschalten der **Anzeige** (Button 2, Watchdog) laeuft
 ueber den bestehenden Supervisor-Namensraum `display/kueche/cmd/mode`, nicht
 ueber die obigen Diashow-Topics; die Zeit bis zum automatischen Wechsel
 stellt `display/kueche/cmd/slideshow/timeout` ein. Die Diashow-Topics steuern
 ausschliesslich Inhalt/Tempo der Diashow selbst, unabhaengig davon, ob sie
-gerade sichtbar ist.
+gerade sichtbar ist. Vom Broker wiederholte retained Nachrichten auf den
+`set/...`-Topics werden ignoriert.
 
 Beispiele:
 
@@ -269,6 +328,10 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/rescan' -m 1
 
 # Intervall auf 15s setzen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/intervall' -m 15
+
+# Naechstes bzw. vorheriges Bild
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/naechstes' -m 1
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/vorheriges' -m 1
 
 # Status lesen
 mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/diashow/status' -C 1 -W 3 -v
@@ -287,9 +350,14 @@ sichtbare Bild nicht abrupt unterbrochen wird.
   Bild-Suffix (`DATEINAME.resize-tmp.jpg/png/webp`), damit Pillow das
   Zielformat sicher erkennt, und wird per `os.replace()` atomar in die
   Originaldatei zurueckgeschrieben.
-- `current.jpg` wird unabhaengig vom Quellformat immer als JPEG erzeugt,
-  damit auch PNG/WebP-Quellen im Browser-Frontend zuverlaessig angezeigt
-  werden.
+- `current.jpg` ist unabhaengig vom Quellformat immer ein JPEG, damit auch
+  PNG/WebP-Quellen im Browser-Frontend zuverlaessig angezeigt werden.
+- Schnellweg: Ist die Quelldatei bereits ein JPEG (RGB oder Graustufen), passt
+  in 1920x1080 und hat keine EXIF-Drehung, wird sie unveraendert nach
+  `current.jpg` kopiert statt neu kodiert. Das verkuerzt die Wartezeit nach
+  einem Wisch. Alle anderen Faelle werden wie zuvor neu kodiert.
+- Die Verkleinerung der Originale geschieht lazy bei der ersten Anzeige des
+  jeweiligen Bildes, nicht vorab fuer alle Bilder.
 
 ## Bekanntes Verhalten / Troubleshooting
 
@@ -306,6 +374,15 @@ sichtbare Bild nicht abrupt unterbrochen wird.
 - **Diashow startet nicht automatisch**: `display/kueche/status/slideshow/timeout`
   pruefen (`0` = aus) und ob Taster, Touch oder MQTT-Kommandos den Timer
   laufend zuruecksetzen (siehe [`automatik.md`](automatik.md)).
+- **Wischen reagiert nicht**: Im Journal des Diashow-Dienstes muss
+  `Navigations-API laeuft auf http://127.0.0.1:8091` stehen
+  (`sudo journalctl -u kuechendisplay-diashow.service -n 30 --no-pager`).
+  Steht dort `API-Port ... nicht verfuegbar`, belegt ein anderer Prozess den
+  Port (`ss -ltnp | grep 8091`); dann `api_port` in `config.json` und `API` in
+  `index.html` anpassen. Mit `curl -X POST http://127.0.0.1:8091/api/next`
+  laesst sich die API ohne Touch pruefen. Bei aktiver Kindersicherung ist der
+  Touch gesperrt. Zeigt der Browser noch die alte Seite, den Kiosk-Tab neu
+  laden (z. B. `cmd/mode` auf `app` und wieder `slideshow`).
 
 ## Reboot-Test (verifiziertes Verfahren)
 
