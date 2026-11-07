@@ -1,10 +1,15 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang='de'>
 <head>
-<meta charset="UTF-8">
+<meta charset='UTF-8'>
 <title>Kuechendisplay Diashow</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; height: 100%; }
+  html, body {
+    margin: 0; padding: 0; background: #000; overflow: hidden; height: 100%;
+    touch-action: none; overscroll-behavior: none;
+    user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
   #bild {
     width: 100%;
     height: 100%;
@@ -12,47 +17,146 @@
     background: #000;
     opacity: 0;
     transition: opacity 0.8s ease-in-out;
+    -webkit-user-drag: none;
   }
   #bild.show { opacity: 1; }
+  .zone {
+    position: fixed; top: 0; bottom: 0; width: 30%;
+    background: rgba(255, 255, 255, 0.18);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.35s ease-out;
+  }
+  #zone-links { left: 0; }
+  #zone-rechts { right: 0; }
+  .zone.flash { opacity: 1; transition: none; }
+  #debug {
+    display: none; position: fixed; left: 8px; bottom: 8px; max-width: 70%;
+    padding: 8px 12px; background: rgba(0, 0, 0, 0.8); color: #9f9;
+    font: 16px/1.3 monospace; white-space: pre; pointer-events: none; z-index: 10;
+  }
 </style>
 </head>
 <body>
-<img id="bild" src="" alt="Diashow">
+<img id='bild' src='' alt='Diashow' draggable='false'>
+<div id='zone-links' class='zone'></div>
+<div id='zone-rechts' class='zone'></div>
+<div id='debug'></div>
 <script>
-let intervalMs = 10000;
-let timer = null;
+const POLL_MS = 500;
+// Tippen auf die linke / rechte Bildschirmseite blaettert zurueck / vor.
+const ZONE_FRACTION = 0.3;
+const TAP_MAX_MOVE_PX = 40;
+const TAP_MAX_MS = 800;
+const API = location.protocol + '//' + location.hostname + ':8091';
+const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
 
-async function ladeStatus() {
-  try {
-    const res = await fetch("img/status.json?_=" + Date.now());
-    const status = await res.json();
-    if (status.intervall) {
-      intervalMs = Math.max(2000, status.intervall * 1000);
-    }
-  } catch (e) {
-    console.warn("Status konnte nicht geladen werden", e);
-  }
+let lastSeq = null;
+let lastStatus = {};
+const logLines = [];
+
+function zeigeDebug() {
+  if (!DEBUG) return;
+  const el = document.getElementById('debug');
+  el.style.display = 'block';
+  const s = lastStatus;
+  const kopf = 'Bild ' + (s.index ?? '-') + ' / ' + (s.anzahl_bilder ?? '-') + '  ' + (s.datei ?? '');
+  el.textContent = [kopf].concat(logLines).join('\n');
+}
+
+function dlog(text) {
+  if (!DEBUG) return;
+  logLines.push(new Date().toLocaleTimeString('de-DE') + ' ' + text);
+  while (logLines.length > 8) logLines.shift();
+  zeigeDebug();
 }
 
 function zeigeBild() {
-  const img = document.getElementById("bild");
+  const img = document.getElementById('bild');
   const neu = new Image();
   neu.onload = () => {
     img.src = neu.src;
-    img.classList.add("show");
+    img.classList.add('show');
   };
-  neu.onerror = () => console.warn("Bild konnte nicht geladen werden");
-  neu.src = "img/current.jpg?_=" + Date.now();
+  neu.onerror = () => console.warn('Bild konnte nicht geladen werden');
+  neu.src = 'img/current.jpg?_=' + Date.now();
 }
 
-async function tick() {
-  await ladeStatus();
-  zeigeBild();
-  clearTimeout(timer);
-  timer = setTimeout(tick, intervalMs);
+// Der Dienst erhoeht seq in status.json, sobald current.jpg ersetzt wurde.
+async function poll() {
+  try {
+    const res = await fetch('img/status.json?_=' + Date.now(), { cache: 'no-store' });
+    const status = await res.json();
+    lastStatus = status;
+    if (status.seq !== undefined && status.seq !== lastSeq) {
+      lastSeq = status.seq;
+      zeigeBild();
+    }
+    zeigeDebug();
+  } catch (e) {
+    console.warn('Status konnte nicht geladen werden', e);
+  } finally {
+    setTimeout(poll, POLL_MS);
+  }
 }
 
-tick();
+function flash(seite) {
+  const el = document.getElementById('zone-' + seite);
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 120);
+}
+
+function senden(richtung) {
+  dlog('senden ' + richtung);
+  fetch(API + '/api/' + richtung, { method: 'POST', mode: 'no-cors' })
+    .catch((e) => {
+      console.warn('Navigation fehlgeschlagen', e);
+      dlog('FEHLER ' + e);
+    });
+}
+
+let down = null;
+
+document.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  down = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now() };
+});
+
+document.addEventListener('pointerup', (e) => {
+  if (!down || down.id !== e.pointerId) return;
+  const d = down;
+  down = null;
+  const bewegt = Math.hypot(e.clientX - d.x, e.clientY - d.y);
+  if (bewegt > TAP_MAX_MOVE_PX || Date.now() - d.t > TAP_MAX_MS) return;
+  const anteil = e.clientX / window.innerWidth;
+  if (anteil < ZONE_FRACTION) {
+    flash('links');
+    senden('prev');
+  } else if (anteil > 1 - ZONE_FRACTION) {
+    flash('rechts');
+    senden('next');
+  }
+});
+
+document.addEventListener('pointercancel', () => { down = null; });
+
+// Zum Testen am PC: Pfeiltasten
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight') senden('next');
+  else if (e.key === 'ArrowLeft') senden('prev');
+});
+
+// Diagnose-Modus (?debug=1): zeigt Bildposition und die letzten Ereignisse
+if (DEBUG) {
+  ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend', 'click'].forEach((typ) => {
+    document.addEventListener(typ, (e) => {
+      const p = (e.changedTouches && e.changedTouches[0]) || e;
+      dlog(typ + ' ' + Math.round(p.clientX) + ',' + Math.round(p.clientY) + (e.pointerType ? ' ' + e.pointerType : ''));
+    }, { capture: true, passive: true });
+  });
+  zeigeDebug();
+}
+
+poll();
 </script>
 </body>
 </html>

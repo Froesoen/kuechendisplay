@@ -105,6 +105,10 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/notify' -m $'# Muell\n**Heu
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
   -m '{"key":"2_long","topic":"cmd/wallmode","payload":"true"}'
 
+# Taster 3 (langer Druck) auf "naechstes Diashow-Bild" belegen
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/button/map' \
+  -m '{"key":"3_long","topic":"diashow/set/naechstes","payload":"1"}'
+
 # Als individueller Nutzer anmelden (Kennung aus secrets.json, ohne Passwort)
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/user' -m 'person_c'
 ```
@@ -211,6 +215,10 @@ ausschliesslich `cmd/notify` = `Kindersicherung` aus.
 | 3 kurz | `cmd/app` = `nodered` |
 | 4 kurz | `cmd/notify/clear` = `` |
 
+Da das `topic` einer Belegung relativ zu `display/kueche/` angegeben wird,
+lassen sich auch die Diashow-Topics auf Taster legen, z. B. `diashow/set/naechstes`
+mit Payload `1` (siehe Beispiel oben).
+
 ## Diashow-Modul (`slideshow/slideshow_service.py`)
 
 Eigener MQTT-Client mit Praefix `display/kueche/diashow` (siehe
@@ -225,7 +233,13 @@ gesteuert, siehe oben; der automatische Wechsel ueber
 | `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` (min. 2s) | Anzeigedauer pro Bild aendern |
 | `display/kueche/diashow/set/rescan` | Eingang | beliebig, z. B. `1` | Neu-Scan des NAS-Ordners ausloesen (wird beim naechsten Bildwechsel wirksam) |
 | `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow pausieren/fortsetzen |
-| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":...}` | Aktueller Zustand fuer Dashboards/Node-RED |
+| `display/kueche/diashow/set/naechstes` | Eingang | beliebig, z. B. `1` | Zum naechsten Bild blaettern; startet das Intervall neu |
+| `display/kueche/diashow/set/vorheriges` | Eingang | beliebig, z. B. `1` | Zum vorherigen Bild blaettern; startet das Intervall neu |
+| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":..., "index":..., "datei":...}` | Aktueller Zustand fuer Dashboards/Node-RED; `seq` steigt mit jedem neuen Bild, `index` ist die 1-basierte Position des angezeigten Bildes (`0` = noch kein Bild), `datei` sein Dateiname |
+
+Vom Broker wiederholte retained Nachrichten auf `set/...` werden ignoriert.
+Am Touchscreen blaettert man durch Tippen auf die linke (zurueck) bzw. rechte
+Seite (vor); Details in [`diashow.md`](diashow.md).
 
 ### Beispiele
 
@@ -239,6 +253,10 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/intervall' -m 15
 # Diashow pausieren / fortsetzen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/aktiv' -m OFF
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/aktiv' -m ON
+
+# Naechstes bzw. vorheriges Bild
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/naechstes' -m 1
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/vorheriges' -m 1
 
 # Status lesen
 mosquitto_sub -h mqtt -p 1883 -t 'display/kueche/diashow/status' -C 1 -W 3 -v
@@ -269,4 +287,6 @@ Markdown-Rendering in `notification_overlay.py` ergaenzt am 10.10.2026.
 Auto-Logout per Touch, Diashow-Timeout (`cmd/slideshow/timeout`) und
 Direkt-Logout ergaenzt am 15.10.2026 (siehe `docs/automatik.md`).
 `cmd/user` per Kennung ohne Passwort, Reconnect-Verhalten der
-Kindersicherung und Ignorieren retained Kommandos ergaenzt am 15.10.2026.*
+Kindersicherung und Ignorieren retained Kommandos ergaenzt am 15.10.2026.
+Blaettern in der Diashow (`set/naechstes`, `set/vorheriges`, Tippen links/rechts,
+`seq`, `index` und `datei` im Status) ergaenzt am 07.11.2026.*
