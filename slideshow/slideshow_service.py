@@ -10,9 +10,10 @@ Originaldatei ueberschrieben (im Quellordner liegen laut Vorgabe nur Kopien,
 ein Ueberschreiben ist also unkritisch).
 
 Manueller Rescan, Anzeigegeschwindigkeit sowie Vor-/Zurueckblaettern sind per
-MQTT steuerbar. Das Frontend (www/index.html) blaettert per Wischgeste ueber
-einen kleinen lokalen HTTP-Endpunkt (POST /api/next, /api/prev auf
-127.0.0.1:8091, konfigurierbar mit api_host/api_port).
+MQTT steuerbar. Das Frontend (www/index.html) blaettert per Tippen auf die
+linke bzw. rechte Bildschirmseite ueber einen kleinen lokalen HTTP-Endpunkt
+(POST /api/next, /api/prev auf 127.0.0.1:8091, konfigurierbar mit
+api_host/api_port).
 """
 
 from __future__ import annotations
@@ -68,6 +69,8 @@ class DiashowService:
         self.playlist: List[Path] = []
         # Position des aktuell angezeigten Bildes in der Playlist (-1 = noch keins)
         self.pos = -1
+        # Dateiname des aktuell angezeigten Bildes (fuer den Status)
+        self.current_name: Optional[str] = None
         self.last_scan: Optional[str] = None
         self.active = True
         # Startet bei der Unix-Zeit, damit ein Dienst-Neustart nie einen
@@ -79,6 +82,9 @@ class DiashowService:
         self._wake = threading.Event()
         self._nav_lock = threading.Lock()
         self._nav_pending = 0
+        # True, sobald mindestens ein manueller Wechsel angefordert wurde
+        # (auch wenn sich Vor und Zurueck zu 0 aufheben).
+        self._nav_requested = False
 
         prefix = config["mqtt"]["topic_prefix"].rstrip("/")
         self.topic_prefix = prefix
@@ -121,6 +127,7 @@ class DiashowService:
         elif msg.topic == self.topic_set_rescan:
             log.info("Manueller Rescan ueber MQTT angefordert")
             self.rescan_requested.set()
+            self._wake.set()
         elif msg.topic == self.topic_set_active:
             self.active = payload.upper() not in ("OFF", "0", "FALSE")
             log.info("Diashow aktiv=%s", self.active)
@@ -134,10 +141,13 @@ class DiashowService:
         """Blaettert um delta Bilder (positiv = vor, negativ = zurueck).
 
         Thread-sicher: wird aus dem MQTT-Thread und dem HTTP-Thread aufgerufen.
-        Mehrere schnelle Aufrufe werden zusammengefasst.
+        Mehrere schnelle Aufrufe werden zusammengefasst. Heben sich Vor und
+        Zurueck auf (Summe 0), wird das aktuelle Bild erneut angezeigt und
+        nicht automatisch weitergeschaltet.
         """
         with self._nav_lock:
             self._nav_pending += delta
+            self._nav_requested = True
         self._wake.set()
         log.info("Manuelle Navigation: %+d", delta)
 
@@ -172,7 +182,7 @@ class DiashowService:
         try:
             server = ThreadingHTTPServer((host, port), Handler)
         except OSError:
-            log.exception("API-Port %s:%s nicht verfuegbar - Wischen deaktiviert", host, port)
+            log.exception("API-Port %s:%s nicht verfuegbar - Blaettern per Tippen deaktiviert", host, port)
             return
         threading.Thread(target=server.serve_forever, daemon=True).start()
         log.info("Navigations-API laeuft auf http://%s:%s", host, port)
@@ -184,6 +194,9 @@ class DiashowService:
             "letzter_scan": self.last_scan,
             "aktiv": self.active,
             "seq": self.seq,
+            # 1-basierte Position des angezeigten Bildes, 0 = noch keins
+            "index": (self.pos + 1) if (self.pos >= 0 and self.current_name) else 0,
+            "datei": self.current_name,
         }
         try:
             self.client.publish(self.topic_status, json.dumps(data), retain=True)
@@ -209,6 +222,9 @@ class DiashowService:
 
     def _rescan(self) -> None:
         self.playlist = self.scan_images()
+        # Die alte Position gehoert zur alten Reihenfolge und ist ungueltig.
+        self.pos = -1
+        self.current_name = None
         self.last_scan = datetime.datetime.now().isoformat(timespec="seconds")
         self.rescan_requested.clear()
         self._publish_status()
@@ -271,6 +287,7 @@ class DiashowService:
         except Exception:
             log.exception("Fehler beim Erzeugen von %s", target)
             return
+        self.current_name = path.name
         # seq erst nach dem Ersetzen von current.jpg erhoehen: das Frontend
         # laedt das Bild, sobald sich seq in status.json aendert.
         self.seq += 1
@@ -284,23 +301,29 @@ class DiashowService:
         while not self.stop_requested.is_set():
             with self._nav_lock:
                 delta = self._nav_pending
+                manual = self._nav_requested
                 self._nav_pending = 0
+                self._nav_requested = False
 
             if self.rescan_requested.is_set() or not self.playlist:
                 self._rescan()
-                self.pos = -1
                 delta = 0
+                manual = False
 
-            if not self.active and delta == 0:
+            if not self.active and not manual:
                 self._wake.wait(1.0)
                 self._wake.clear()
                 continue
 
             if self.playlist:
                 count = len(self.playlist)
-                if delta != 0:
-                    # manuell: umlaufend vor/zurueck
-                    self.pos = (self.pos + delta) % count
+                if manual:
+                    if delta != 0:
+                        # manuell: umlaufend vor/zurueck
+                        self.pos = (self.pos + delta) % count
+                    elif self.pos < 0:
+                        self.pos = 0
+                    # delta == 0 bei gueltiger Position: aktuelles Bild erneut anzeigen
                 else:
                     self.pos += 1
                     if self.pos >= count:
@@ -313,7 +336,7 @@ class DiashowService:
                     self.ensure_scaled(current)
                     self.publish_current(current)
 
-            # Wartet bis zum naechsten automatischen Wechsel; ein Wisch oder
+            # Wartet bis zum naechsten automatischen Wechsel; ein Tipp oder
             # MQTT-Kommando weckt sofort und startet den Timer damit neu.
             self._wake.wait(timeout=self.interval)
             self._wake.clear()
