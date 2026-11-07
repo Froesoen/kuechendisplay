@@ -235,11 +235,11 @@ gesteuert, siehe oben; der automatische Wechsel ueber
 | `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow pausieren/fortsetzen |
 | `display/kueche/diashow/set/naechstes` | Eingang | beliebig, z. B. `1` | Zum naechsten Bild blaettern; startet das Intervall neu |
 | `display/kueche/diashow/set/vorheriges` | Eingang | beliebig, z. B. `1` | Zum vorherigen Bild blaettern; startet das Intervall neu |
-| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":...}` | Aktueller Zustand fuer Dashboards/Node-RED; `seq` steigt mit jedem neuen Bild |
+| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":..., "index":..., "datei":...}` | Aktueller Zustand fuer Dashboards/Node-RED; `seq` steigt mit jedem neuen Bild, `index` ist die 1-basierte Position des angezeigten Bildes (`0` = noch kein Bild), `datei` sein Dateiname |
 
 Vom Broker wiederholte retained Nachrichten auf `set/...` werden ignoriert.
-Am Touchscreen blaettert man per Wischgeste (links = naechstes, rechts =
-vorheriges Bild); Details in [`diashow.md`](diashow.md).
+Am Touchscreen blaettert man durch Tippen auf die linke (zurueck) bzw. rechte
+Seite (vor); Details in [`diashow.md`](diashow.md).
 
 ### Beispiele
 
@@ -288,5 +288,5 @@ Auto-Logout per Touch, Diashow-Timeout (`cmd/slideshow/timeout`) und
 Direkt-Logout ergaenzt am 15.10.2026 (siehe `docs/automatik.md`).
 `cmd/user` per Kennung ohne Passwort, Reconnect-Verhalten der
 Kindersicherung und Ignorieren retained Kommandos ergaenzt am 15.10.2026.
-Blaettern in der Diashow (`set/naechstes`, `set/vorheriges`, Wischgeste,
-`seq` im Status) ergaenzt am 07.11.2026.*
+Blaettern in der Diashow (`set/naechstes`, `set/vorheriges`, Tippen links/rechts,
+`seq`, `index` und `datei` im Status) ergaenzt am 07.11.2026.*
