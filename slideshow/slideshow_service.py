@@ -14,12 +14,18 @@ MQTT steuerbar. Das Frontend (www/index.html) blaettert per Tippen auf die
 linke bzw. rechte Bildschirmseite ueber einen kleinen lokalen HTTP-Endpunkt
 (POST /api/next, /api/prev auf 127.0.0.1:8091, konfigurierbar mit
 api_host/api_port).
+
+Das per MQTT eingestellte Intervall wird in ~/.kuechendisplay/diashow_state.json
+(konfigurierbar mit state_file) gespeichert und beim naechsten Start wieder
+geladen; es hat Vorrang vor default_interval aus der config.json. Der Zustand
+"pausiert" wird bewusst nicht gespeichert.
 """
 
 from __future__ import annotations
 
 import os
 import json
+import math
 import time
 import random
 import shutil
@@ -37,6 +43,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("diashow")
 
 CONFIG_PATH = Path(os.environ.get("DIASHOW_CONFIG", "/home/christoph/kuechendisplay/slideshow/config.json"))
+DEFAULT_STATE_FILE = Path.home() / ".kuechendisplay" / "diashow_state.json"
+MIN_INTERVAL_SECONDS = 2.0
 
 EXIF_ORIENTATION_TAG = 0x0112
 
@@ -65,7 +73,12 @@ class DiashowService:
         self.target_h = int(config.get("target_height", 1080))
         self.jpeg_quality = int(config.get("jpeg_quality", 85))
 
+        self.state_file = Path(config.get("state_file", DEFAULT_STATE_FILE)).expanduser()
         self.interval = float(config.get("default_interval", 10.0))
+        saved_interval = self._load_interval()
+        if saved_interval is not None:
+            self.interval = saved_interval
+            log.info("Gespeichertes Intervall geladen: %.1fs (%s)", self.interval, self.state_file)
         self.playlist: List[Path] = []
         # Position des aktuell angezeigten Bildes in der Playlist (-1 = noch keins)
         self.pos = -1
@@ -106,6 +119,29 @@ class DiashowService:
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
 
+    def _load_interval(self) -> Optional[float]:
+        """Liest das gespeicherte Intervall; None = nichts (Gueltiges) gespeichert."""
+        try:
+            value = float(json.loads(self.state_file.read_text(encoding="utf-8"))["intervall"])
+        except FileNotFoundError:
+            return None
+        except Exception:
+            log.exception("Gespeichertes Intervall konnte nicht gelesen werden - nutze default_interval")
+            return None
+        if not math.isfinite(value) or value < MIN_INTERVAL_SECONDS:
+            log.warning("Gespeichertes Intervall %r ungueltig - nutze default_interval", value)
+            return None
+        return value
+
+    def _save_interval(self) -> None:
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.state_file.with_name(self.state_file.name + ".tmp")
+            tmp.write_text(json.dumps({"intervall": self.interval}), encoding="utf-8")
+            os.replace(tmp, self.state_file)
+        except Exception:
+            log.exception("Intervall konnte nicht gespeichert werden (%s)", self.state_file)
+
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         log.info("MQTT verbunden (reason_code=%s)", reason_code)
         client.subscribe(f"{self.topic_prefix}/set/#")
@@ -119,7 +155,11 @@ class DiashowService:
         payload = msg.payload.decode(errors="ignore").strip()
         if msg.topic == self.topic_set_interval:
             try:
-                self.interval = max(2.0, float(payload))
+                value = float(payload)
+                if not math.isfinite(value):
+                    raise ValueError(payload)
+                self.interval = max(MIN_INTERVAL_SECONDS, value)
+                self._save_interval()
                 log.info("Neues Intervall: %.1fs", self.interval)
                 self._publish_status()
             except ValueError:
