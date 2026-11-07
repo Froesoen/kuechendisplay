@@ -155,6 +155,12 @@ auf oberster Ebene der `config.json` aendern. Das Frontend ruft den Port
 `8091` auf; bei einem anderen Port muss die Konstante `API` in
 `slideshow/www/index.html` angepasst werden.
 
+`default_interval` gilt nur, solange noch kein Intervall per MQTT gesetzt
+wurde. Danach liegt der zuletzt eingestellte Wert in
+`~/.kuechendisplay/diashow_state.json` und hat beim Start Vorrang (siehe
+"Intervall bleibt erhalten"). Der Speicherort laesst sich optional mit dem
+Schluessel `state_file` in der `config.json` aendern.
+
 Der Topic-Praefix `display/kueche/diashow` ist bewusst an den bestehenden
 Supervisor-Namensraum (`display/kueche/`) angeglichen, damit kein zweiter,
 davon abweichender MQTT-Namensraum entsteht.
@@ -337,7 +343,7 @@ ab (siehe [`automatik.md`](automatik.md)).
 
 | Topic | Richtung | Payload | Zweck |
 |---|---|---|---|
-| `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` | Anzeigedauer pro Bild aendern (min. 2s) |
+| `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` | Anzeigedauer pro Bild aendern (min. 2s); wird dauerhaft gespeichert |
 | `display/kueche/diashow/set/rescan` | Eingang | beliebig, z. B. `1` | Loest einen Neu-Scan des NAS-Ordners aus |
 | `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow pausieren/fortsetzen |
 | `display/kueche/diashow/set/naechstes` | Eingang | beliebig, z. B. `1` | Zum naechsten Bild blaettern |
@@ -355,6 +361,31 @@ gerade sichtbar ist. Vom Broker wiederholte retained Nachrichten auf den
 Die Reihenfolge der Bilder ist zwischen zwei Scans fest. Neu gemischt wird
 beim Start des Dienstes, nach einem Rescan und wenn die Liste einmal
 durchgelaufen ist; danach beginnt `index` wieder bei 1.
+
+### Intervall bleibt erhalten
+
+Jedes per `set/intervall` gesetzte Intervall (z. B. vom Slider im
+Node-RED-Dashboard) speichert der Dienst in
+`~/.kuechendisplay/diashow_state.json`, z. B. `{"intervall": 31.0}`. Beim
+Start des Dienstes hat dieser Wert Vorrang vor `default_interval` aus der
+`config.json`. Dadurch bleibt das Intervall nach einem Neustart des Dienstes
+oder des Pi erhalten.
+
+- Ist die Datei nicht vorhanden, defekt oder enthaelt sie einen ungueltigen
+  Wert (unter 2 s oder keine endliche Zahl), gilt `default_interval`; bei
+  einem ungueltigen Inhalt steht eine Meldung im Journal.
+- Der Zustand "pausiert" (`set/aktiv`) wird bewusst **nicht** gespeichert.
+  Nach jedem Start laeuft die Diashow und wechselt automatisch.
+- Nicht endliche Werte (`inf`, `nan`) lehnt der Dienst ab und schreibt eine
+  Warnung ins Journal.
+- Zurueck zum Wert aus der `config.json`: Datei loeschen und den Dienst neu
+  starten.
+
+```bash
+cat ~/.kuechendisplay/diashow_state.json
+rm ~/.kuechendisplay/diashow_state.json
+sudo systemctl restart kuechendisplay-diashow.service
+```
 
 Beispiele:
 
@@ -410,6 +441,16 @@ sichtbare Bild nicht abrupt unterbrochen wird.
 - **Diashow startet nicht automatisch**: `display/kueche/status/slideshow/timeout`
   pruefen (`0` = aus) und ob Taster, Touch oder MQTT-Kommandos den Timer
   laufend zuruecksetzen (siehe [`automatik.md`](automatik.md)).
+- **Intervall springt nach einem Neustart auf den Standard (10 s)**: Im
+  Journal des Diashow-Dienstes muss beim Start
+  `Gespeichertes Intervall geladen: ...` stehen
+  (`sudo journalctl -u kuechendisplay-diashow.service -b --no-pager | grep -i intervall`).
+  Fehlt die Zeile, existiert `~/.kuechendisplay/diashow_state.json` nicht
+  oder ist ungueltig (dann steht eine Warnung im Journal). Pruefen, ob die
+  Datei dem Benutzer des Dienstes (`christoph`) gehoert und beschreibbar ist
+  (`ls -l ~/.kuechendisplay/`); Schreibfehler stehen als
+  `Intervall konnte nicht gespeichert werden` im Journal. Ein Intervall
+  unter 2 s oder `inf`/`nan` wird nicht uebernommen.
 - **Tippen reagiert nicht**: Im Journal des Diashow-Dienstes muss
   `Navigations-API laeuft auf http://127.0.0.1:8091` stehen
   (`sudo journalctl -u kuechendisplay-diashow.service -n 30 --no-pager`).
