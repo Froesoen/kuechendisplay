@@ -28,7 +28,7 @@ Das Repository ist so aufgebaut, dass es 1:1 als Checkout auf dem Raspberry Pi d
   supervisor/               <- systemd-Dienst startet hieraus
   fingerprint-admin/        <- GUI-Start hieraus
   docs/
-~/.kuechendisplay/          <- NICHT im Repo: secrets.json, fingerprint_mapping.py, button_map.json, slideshow_timeout.json
+~/.kuechendisplay/          <- NICHT im Repo: secrets.json, fingerprint_mapping.py, button_map.json, slideshow_timeout.json, diashow_state.json
 ~/kuechendisplay-venv/      <- NICHT im Repo: Python-venv (Supervisor und Fingerabdruck-GUI)
 ```
 
