@@ -61,6 +61,9 @@
 <div id='debug'></div>
 <script>
 const POLL_MS = 500;
+// Nach einem Tipp wird der Status zusaetzlich nach diesen Zeiten abgefragt,
+// damit Bild bzw. Pause-Symbol nicht bis zum naechsten Takt warten.
+const NACH_TIPP_MS = [150, 450];
 // Tippen links / rechts blaettert zurueck / vor, Tippen in der Mitte haelt an bzw. setzt fort.
 const ZONE_FRACTION = 0.3;
 const TAP_MAX_MOVE_PX = 40;
@@ -70,6 +73,8 @@ const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
 
 let lastSeq = null;
 let lastStatus = {};
+let anfrageZaehler = 0;
+let angewendet = 0;
 const logLines = [];
 
 function zeigeDebug() {
@@ -78,7 +83,7 @@ function zeigeDebug() {
   el.style.display = 'block';
   const s = lastStatus;
   const kopf = 'Bild ' + (s.index ?? '-') + ' / ' + (s.anzahl_bilder ?? '-') + '  ' + (s.datei ?? '')
-    + (s.aktiv === false ? '  [PAUSE]' : '');
+    + '  [' + (s.reihenfolge ?? '-') + ']' + (s.aktiv === false ? '  [PAUSE]' : '');
   el.textContent = [kopf].concat(logLines).join('\n');
 }
 
@@ -105,10 +110,14 @@ function zeigeBild() {
 }
 
 // Der Dienst erhoeht seq in status.json, sobald current.jpg ersetzt wurde.
-async function poll() {
+// Antworten, die nach einer neueren Anfrage eintreffen, werden verworfen.
+async function pruefeStatus() {
+  const nr = ++anfrageZaehler;
   try {
     const res = await fetch('img/status.json?_=' + Date.now(), { cache: 'no-store' });
     const status = await res.json();
+    if (nr < angewendet) return;
+    angewendet = nr;
     lastStatus = status;
     if (status.seq !== undefined && status.seq !== lastSeq) {
       lastSeq = status.seq;
@@ -118,9 +127,12 @@ async function poll() {
     zeigeDebug();
   } catch (e) {
     console.warn('Status konnte nicht geladen werden', e);
-  } finally {
-    setTimeout(poll, POLL_MS);
   }
+}
+
+async function poll() {
+  await pruefeStatus();
+  setTimeout(poll, POLL_MS);
 }
 
 function flash(seite) {
@@ -146,6 +158,9 @@ function blitz(pausiert) {
 function senden(richtung) {
   dlog('senden ' + richtung);
   fetch(API + '/api/' + richtung, { method: 'POST', mode: 'no-cors' })
+    .then(() => {
+      NACH_TIPP_MS.forEach((ms) => setTimeout(pruefeStatus, ms));
+    })
     .catch((e) => {
       console.warn('Bedienung fehlgeschlagen', e);
       dlog('FEHLER ' + e);
