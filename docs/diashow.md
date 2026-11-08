@@ -417,7 +417,8 @@ verkuerzt sich dadurch.
 - Angehaltene Diashow: Das naechste Bild wird trotzdem einmal vorbereitet und
   beim Fortsetzen oder beim naechsten Tipp nach rechts verwendet.
 - `next.jpg` (und die temporaere Datei `next.tmp.jpg`) liegen im selben Ordner
-  wie `current.jpg` und werden nicht committed (siehe `.gitignore`).
+  wie `current.jpg` (`slideshow/www/img/`, Laufzeitdaten, nicht Teil des
+  Repositorys).
 
 ## Warnung bei leerer Playlist
 
