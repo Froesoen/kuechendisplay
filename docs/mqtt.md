@@ -164,6 +164,25 @@ Die Texte enthalten keine Markdown-Syntax und erscheinen daher unveraendert
 Das Fingerabdruck-Admin-Tool (`fingerprint-admin/`) sendet bewusst keine
 MQTT-Meldungen und bleibt eigenstaendig nutzbar.
 
+## Diashow: Meldung bei leerer Playlist (`cmd/notify`)
+
+Findet der Diashow-Dienst bei einem Scan keine Bilder (z. B. NAS nicht
+gemountet), veroeffentlicht er selbst eine Meldung auf
+`display/kueche/cmd/notify`; das Notification-Overlay zeigt sie an. Der
+Topic ist ueber `notify_topic` in `slideshow/config.json` aenderbar (Standard:
+Praefix-Basis des Diashow-Topics plus `/cmd/notify`). Die Meldung wird
+hoechstens alle 10 Minuten gesendet; sobald wieder Bilder gefunden werden,
+blendet der Dienst sie per `cmd/notify/clear` aus.
+
+| Text | Bedeutung |
+|---|---|
+| `Diashow: Keine Bilder gefunden (NAS prüfen)` | Scan ohne Treffer: NAS-Mount und Bilderordner pruefen (siehe [`diashow.md`](diashow.md)) |
+
+Der Text enthaelt keine Markdown-Syntax und erscheint daher unveraendert. Da
+`cmd/notify` und `cmd/notify/clear` den Timer fuer den automatischen Wechsel
+zur Diashow nicht zuruecksetzen (siehe "Aktivitaet und Timer"), hat die
+Meldung darauf keinen Einfluss.
+
 ## Supervisor: Status (Ausgang, retained)
 
 | Topic | Payload | Zweck |
@@ -187,6 +206,9 @@ muss ein Publisher deshalb einen echten Boolean senden; ein Subscriber erhaelt d
 Payload zunaechst als Text und parst ihn bei Bedarf mit einem JSON-Node. In einer
 gespeicherten Button-Map muessen Payloads wie `on` fuer `cmd/wallmode` oder
 `cmd/display/power` per `cmd/button/map` auf `true` bzw. `false` umgestellt werden.
+
+Ausnahme: Die Topics des Diashow-Moduls (`diashow/set/...`) haben eigene
+Payloads (z. B. `ON` / `OFF` fuer `set/aktiv`, siehe unten).
 
 ### Beispiele zum Lesen
 
@@ -230,16 +252,19 @@ gesteuert, siehe oben; der automatische Wechsel ueber
 
 | Topic | Richtung | Payload | Zweck |
 |---|---|---|---|
-| `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` (min. 2s) | Anzeigedauer pro Bild aendern |
+| `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` (min. 2s) | Anzeigedauer pro Bild aendern; wird dauerhaft gespeichert |
+| `display/kueche/diashow/set/reihenfolge` | Eingang | `zufall` oder `reihenfolge` | Reihenfolge umschalten: gemischt bzw. sortiert nach Ordner und Dateiname; wird dauerhaft gespeichert; das aktuelle Bild bleibt Ausgangspunkt, danach folgt sofort das naechste Bild der neuen Reihenfolge |
 | `display/kueche/diashow/set/rescan` | Eingang | beliebig, z. B. `1` | Neu-Scan des NAS-Ordners ausloesen (wird beim naechsten Bildwechsel wirksam) |
-| `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow pausieren/fortsetzen |
+| `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow fortsetzen/anhalten |
 | `display/kueche/diashow/set/naechstes` | Eingang | beliebig, z. B. `1` | Zum naechsten Bild blaettern; startet das Intervall neu |
 | `display/kueche/diashow/set/vorheriges` | Eingang | beliebig, z. B. `1` | Zum vorherigen Bild blaettern; startet das Intervall neu |
-| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":..., "index":..., "datei":...}` | Aktueller Zustand fuer Dashboards/Node-RED; `seq` steigt mit jedem neuen Bild, `index` ist die 1-basierte Position des angezeigten Bildes (`0` = noch kein Bild), `datei` sein Dateiname |
+| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "reihenfolge":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":..., "index":..., "datei":...}` | Aktueller Zustand fuer Dashboards/Node-RED; `reihenfolge` ist `zufall` oder `reihenfolge`, `seq` steigt mit jedem neuen Bild, `index` ist die 1-basierte Position des angezeigten Bildes (`0` = noch kein Bild), `datei` sein Dateiname |
 
 Vom Broker wiederholte retained Nachrichten auf `set/...` werden ignoriert.
 Am Touchscreen blaettert man durch Tippen auf die linke (zurueck) bzw. rechte
-Seite (vor); Details in [`diashow.md`](diashow.md).
+Seite (vor); ein Tipp in die Mitte haelt die Diashow an bzw. setzt sie fort
+(`aktiv` im Status, kleines Pause-Symbol unten links). Details in
+[`diashow.md`](diashow.md).
 
 ### Beispiele
 
@@ -250,7 +275,11 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/rescan' -m 1
 # Intervall auf 15s setzen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/intervall' -m 15
 
-# Diashow pausieren / fortsetzen
+# Reihenfolge: sortiert bzw. zufaellig
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/reihenfolge' -m reihenfolge
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/reihenfolge' -m zufall
+
+# Diashow anhalten / fortsetzen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/aktiv' -m OFF
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/aktiv' -m ON
 
@@ -289,4 +318,7 @@ Direkt-Logout ergaenzt am 15.10.2026 (siehe `docs/automatik.md`).
 `cmd/user` per Kennung ohne Passwort, Reconnect-Verhalten der
 Kindersicherung und Ignorieren retained Kommandos ergaenzt am 15.10.2026.
 Blaettern in der Diashow (`set/naechstes`, `set/vorheriges`, Tippen links/rechts,
-`seq`, `index` und `datei` im Status) ergaenzt am 07.11.2026.*
+`seq`, `index` und `datei` im Status) ergaenzt am 07.11.2026.
+Anhalten/Fortsetzen per Tipp in die Mitte, `set/reihenfolge` (zufaellig oder
+sortiert, `reihenfolge` im Status), Vorladen des naechsten Bildes und die
+Meldung bei leerer Playlist (`cmd/notify`) ergaenzt am 08.11.2026.*

@@ -1,12 +1,14 @@
 # Diashow-Modul
 
-Zeigt Bilder von einem NAS-Ordner in zufaelliger Reihenfolge im Kiosk-Browser
-an. Geschwindigkeit, ein manueller Rescan und das Vor-/Zurueckblaettern sind
-per MQTT steuerbar; am Touchscreen blaettert man durch Tippen auf die linke
-bzw. rechte Bildschirmseite. Bilder werden vor der Anzeige bei Bedarf
-automatisch auf max. 1920x1080 verkleinert; die Originaldatei im NAS-Ordner
-wird dabei ueberschrieben (im Ordner liegen laut Vorgabe nur Kopien, ein
-Ueberschreiben ist unkritisch).
+Zeigt Bilder von einem NAS-Ordner im Kiosk-Browser an, wahlweise in
+zufaelliger oder in sortierter Reihenfolge (nach Ordner und Dateiname).
+Geschwindigkeit, Reihenfolge, ein manueller Rescan, Pause/Fortsetzen und das
+Vor-/Zurueckblaettern sind per MQTT steuerbar; am Touchscreen blaettert man
+durch Tippen auf die linke bzw. rechte Bildschirmseite und haelt die Diashow
+durch Tippen in die Mitte an bzw. setzt sie fort. Bilder werden vor der
+Anzeige bei Bedarf automatisch auf max. 1920x1080 verkleinert; die
+Originaldatei im NAS-Ordner wird dabei ueberschrieben (im Ordner liegen laut
+Vorgabe nur Kopien, ein Ueberschreiben ist unkritisch).
 
 Status: **produktiv im Einsatz** auf dem Kuechendisplay, inklusive
 Supervisor-Integration (Button 2) und verifiziertem Reboot-Verhalten.
@@ -17,19 +19,25 @@ Supervisor-Integration (Button 2) und verifiziertem Reboot-Verhalten.
   unter `/mnt/diashow` eingehaengt. Zugangsdaten liegen unter
   `~/.kuechendisplay/diashow_nas_credentials` (zentrale Ablage aller lokalen
   Geheimnisse des Projekts, analog zu `secrets.json`).
-- **`slideshow/slideshow_service.py`**: durchsucht den Mount rekursiv, mischt
-  die Playlist, prueft/verkleinert Bilder vor der Anzeige, kopiert das
-  aktuelle Bild nach `slideshow/www/img/current.jpg` und meldet Status per
-  MQTT sowie in `slideshow/www/img/status.json`. Der Dienst merkt sich die
-  Position in der Playlist und kann vor- und zurueckblaettern.
+- **`slideshow/slideshow_service.py`**: durchsucht den Mount rekursiv, ordnet
+  die Playlist (zufaellig oder sortiert), prueft/verkleinert Bilder vor der
+  Anzeige, kopiert das aktuelle Bild nach `slideshow/www/img/current.jpg` und
+  meldet Status per MQTT sowie in `slideshow/www/img/status.json`. Der Dienst
+  merkt sich die Position in der Playlist, kann vor- und zurueckblaettern und
+  bereitet das naechste Bild im Hintergrund als `next.jpg` vor (siehe
+  "Vorladen des naechsten Bildes").
 - **Navigations-API**: kleiner HTTP-Endpunkt im Diashow-Dienst auf
-  `127.0.0.1:8091` (`POST /api/next`, `POST /api/prev`), den das Frontend bei
-  einem Tipp aufruft.
+  `127.0.0.1:8091` (`POST /api/next`, `POST /api/prev`, `POST /api/toggle`),
+  den das Frontend bei einem Tipp aufruft.
 - **`slideshow/www/index.html`**: einfache HTML/JS-Seite, die `status.json`
   alle 500 ms abfragt, `current.jpg` bei geaendertem Bildzaehler `seq` laedt
   und im Kiosk-Browser fullscreen anzeigt. Sie erkennt Tipps auf die linke
-  bzw. rechte Seite (Pointer Events) und ruft die Navigations-API auf. Mit
-  `?debug=1` blendet sie einen Diagnose-Bereich ein.
+  bzw. rechte Seite (Blaettern) und in die Mitte (Anhalten/Fortsetzen) per
+  Pointer Events und ruft die Navigations-API auf. Nach einem Tipp fragt sie
+  den Status zusaetzlich nach 150 ms und 450 ms ab, damit Bild und Symbol
+  nicht auf den naechsten 500-ms-Takt warten. Bei angehaltener Diashow zeigt
+  sie unten links ein kleines Pause-Symbol. Mit `?debug=1` blendet sie einen
+  Diagnose-Bereich ein.
 - **Webserver**: liefert `slideshow/www` mit `python3 -m http.server` auf
   Port 8090 fuer den Kiosk-Browser direkt aus dem Checkout aus
   (`WorkingDirectory` der Unit `kuechendisplay-diashow-web.service`).
@@ -158,8 +166,19 @@ auf oberster Ebene der `config.json` aendern. Das Frontend ruft den Port
 `default_interval` gilt nur, solange noch kein Intervall per MQTT gesetzt
 wurde. Danach liegt der zuletzt eingestellte Wert in
 `~/.kuechendisplay/diashow_state.json` und hat beim Start Vorrang (siehe
-"Intervall bleibt erhalten"). Der Speicherort laesst sich optional mit dem
-Schluessel `state_file` in der `config.json` aendern.
+"Intervall und Reihenfolge bleiben erhalten"). Der Speicherort laesst sich
+optional mit dem Schluessel `state_file` in der `config.json` aendern.
+
+Die Reihenfolge der Bilder legt der optionale Schluessel `default_order` fest
+(`zufall` oder `reihenfolge`, Standard `zufall`). Auch er gilt nur, solange
+noch keine Reihenfolge per MQTT gesetzt wurde (siehe "Reihenfolge: zufaellig
+oder sortiert").
+
+Meldungen bei leerer Playlist sendet der Dienst standardmaessig an
+`display/kueche/cmd/notify` (Praefix-Basis des `topic_prefix` plus
+`/cmd/notify`). Mit dem optionalen Schluessel `notify_topic` auf oberster
+Ebene der `config.json` laesst sich dieses Topic aendern (siehe "Warnung bei
+leerer Playlist").
 
 Der Topic-Praefix `display/kueche/diashow` ist bewusst an den bestehenden
 Supervisor-Namensraum (`display/kueche/`) angeglichen, damit kein zweiter,
@@ -185,7 +204,7 @@ Erwartete Ausgabe:
 ```text
 MQTT verbunden (reason_code=Success)
 Navigations-API laeuft auf http://127.0.0.1:8091
-Scan abgeschlossen: N Bilder gefunden
+Scan abgeschlossen: N Bilder gefunden (Reihenfolge: zufall)
 Verkleinert: DATEINAME.jpg (...)
 ```
 
@@ -267,25 +286,27 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/cmd/slideshow/timeout' -m 0
 Details zu Aktivitaetsquellen und Zusammenspiel mit dem Auto-Logout stehen in
 [`automatik.md`](automatik.md).
 
-## Blaettern per Tippen und MQTT
+## Bedienung per Tippen und MQTT
 
-In der Diashow lassen sich Bilder manuell vor- und zurueckblaettern:
+In der Diashow lassen sich Bilder manuell vor- und zurueckblaettern und die
+Diashow anhalten bzw. fortsetzen:
 
 | Bedienung | Wirkung |
 |---|---|
 | Tippen auf die **linken 30 %** des Bildschirms | vorheriges Bild |
 | Tippen auf die **rechten 30 %** des Bildschirms | naechstes Bild |
-| Tippen in der Mitte (40 %) | keine Funktion |
+| Tippen in der **Mitte** (40 %) | Diashow anhalten bzw. fortsetzen |
 | MQTT `display/kueche/diashow/set/naechstes` | naechstes Bild |
 | MQTT `display/kueche/diashow/set/vorheriges` | vorheriges Bild |
-| `POST http://127.0.0.1:8091/api/next` bzw. `/api/prev` | naechstes bzw. vorheriges Bild |
-| Pfeiltasten (nur zum Testen am PC) | naechstes bzw. vorheriges Bild |
+| MQTT `display/kueche/diashow/set/aktiv` (`ON` / `OFF`) | Diashow fortsetzen bzw. anhalten |
+| `POST http://127.0.0.1:8091/api/next`, `/api/prev` bzw. `/api/toggle` | naechstes Bild, vorheriges Bild bzw. Anhalten/Fortsetzen umschalten |
+| Pfeiltasten, Leertaste (nur zum Testen am PC) | naechstes/vorheriges Bild bzw. Anhalten/Fortsetzen |
 
 Verhalten:
 
 - Ein Tipp ist eine kurze Beruehrung: Bewegung unter 40 Pixeln und Dauer unter
-  800 ms. Laengere oder wandernde Beruehrungen zaehlen nicht. Beim Tipp
-  leuchtet die jeweilige Seite kurz auf.
+  800 ms. Laengere oder wandernde Beruehrungen zaehlen nicht. Beim Tipp auf
+  die linke oder rechte Seite leuchtet diese kurz auf.
 - Wischgesten werden nicht ausgewertet. Im Referenz-Setup faengt der
   Kiosk-Browser bzw. der Compositor sie ab: Die Seite bekommt sie nicht oder
   es wechselt der Tab. Deshalb wird getippt statt gewischt.
@@ -296,34 +317,145 @@ Verhalten:
   weiterschaltet.
 - Mehrere schnelle Tipps werden zusammengefasst; angezeigt wird das Endbild.
   Heben sich Vor und Zurueck dabei auf, wird das aktuelle Bild erneut
-  angezeigt und nicht automatisch weitergeschaltet. Zwischen Tipp und neuem
-  Bild liegen etwa 0,5 bis 1 Sekunde.
+  angezeigt und nicht automatisch weitergeschaltet. Vorwaerts geht es
+  schneller als zurueck, weil nur das naechste Bild vorgeladen wird (siehe
+  "Vorladen des naechsten Bildes").
+- Tippen in die Mitte schaltet um: Laeuft die Diashow, wird sie angehalten;
+  ist sie angehalten, wird sie fortgesetzt und zeigt sofort das naechste
+  Bild. Zur Rueckmeldung blitzt kurz ein Pause- bzw. Play-Symbol in der
+  Bildmitte auf.
+- Solange die Diashow angehalten ist, zeigt ein kleines Pause-Symbol in der
+  unteren linken Ecke den Zustand an. Es richtet sich nach `aktiv` im Status
+  und erscheint daher auch, wenn die Diashow per MQTT (`set/aktiv`) oder im
+  Node-RED-Dashboard angehalten wurde.
+- Die Pause wird nicht gespeichert und endet nicht von selbst: Nach einem
+  Neustart des Dienstes laeuft die Diashow immer; ein automatisches
+  Fortsetzen gibt es nicht.
+- Ist die Diashow angehalten, zeigt ein manuelles Blaettern trotzdem das
+  naechste bzw. vorherige Bild; danach bleibt sie angehalten.
 - Das Tippen beendet die Diashow nicht; der Anzeigemodus bleibt `slideshow`.
   Ein Touch setzt wie sonst den Timer fuer den automatischen Wechsel zurueck
   (siehe [`automatik.md`](automatik.md)).
 - Bei aktiver Kindersicherung blockiert das Overlay den Touch; dann ist auch
-  das Tippen gesperrt. Die MQTT-Topics funktionieren weiterhin.
-- Ist die Diashow per `set/aktiv` pausiert, zeigt ein manueller Wechsel
-  trotzdem das naechste bzw. vorherige Bild; danach bleibt sie pausiert.
+  das Tippen (links, rechts und Mitte) gesperrt. Die MQTT-Topics
+  funktionieren weiterhin.
 
 Test:
 
 ```bash
 curl -X POST http://127.0.0.1:8091/api/next
 curl -X POST http://127.0.0.1:8091/api/prev
+curl -X POST http://127.0.0.1:8091/api/toggle
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/naechstes' -m 1
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/vorheriges' -m 1
 ```
 
-Im Journal erscheint pro Wechsel `Manuelle Navigation: +1` bzw. `-1`.
+Im Journal erscheint pro Wechsel `Manuelle Navigation: +1` bzw. `-1`, beim
+Anhalten/Fortsetzen `Diashow aktiv=False` bzw. `True`.
+
+## Reihenfolge: zufaellig oder sortiert
+
+Die Diashow kennt zwei Reihenfolgen:
+
+| Wert | Reihenfolge |
+|---|---|
+| `zufall` | gemischt (Standard); neu gemischt beim Start des Dienstes, nach einem Rescan und wenn die Liste einmal durchgelaufen ist |
+| `reihenfolge` | sortiert nach Ordner, darin nach Dateiname |
+
+Bei `reihenfolge` gilt:
+
+- Die Sortierung ist natuerlich und beachtet die Gross-/Kleinschreibung nicht:
+  `IMG_2.jpg` kommt vor `IMG_10.jpg`.
+- Sortiert wird zuerst nach dem Ordner (Pfad relativ zum Bilderordner),
+  dann nach dem Dateinamen. Die Dateien eines Ordners stehen vor denen seiner
+  Unterordner, wie im Dateimanager. Beispiel:
+
+  ```text
+  08_kuechendisplay/bild_1.jpg
+  08_kuechendisplay/bild_2.jpg
+  08_kuechendisplay/Urlaub/IMG_2.jpg
+  08_kuechendisplay/Urlaub/IMG_10.jpg
+  08_kuechendisplay/Weihnachten/IMG_1.jpg
+  ```
+
+- Nach dem letzten Bild wird neu gescannt und wieder mit dem ersten Bild
+  begonnen. Auch ein manueller Rescan beginnt am Anfang der Liste.
+
+Umgeschaltet wird per MQTT:
+
+```bash
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/reihenfolge' -m reihenfolge
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/reihenfolge' -m zufall
+```
+
+Akzeptiert werden zusaetzlich `sortiert`, `sorted`, `order` und `name` fuer die
+sortierte sowie `zufaellig`, `random` und `shuffle` fuer die zufaellige
+Reihenfolge (ohne Beachtung der Gross-/Kleinschreibung). Ein anderer Wert wird
+ignoriert und als Warnung ins Journal geschrieben.
+
+Beim Umschalten im laufenden Betrieb bleibt das aktuelle Bild Ausgangspunkt:
+Bei `reihenfolge` steht die Diashow an dessen Position in der sortierten
+Liste, bei `zufall` wird es an den Anfang der neu gemischten Liste gesetzt.
+Danach zeigt die Diashow sofort das naechste Bild der neuen Reihenfolge. Ist
+sie gerade angehalten, bleibt sie angehalten. Die Reihenfolge steht im Status
+(`reihenfolge`) und bleibt nach einem Neustart erhalten (siehe "Intervall und
+Reihenfolge bleiben erhalten").
+
+## Vorladen des naechsten Bildes
+
+Nach jeder Anzeige bereitet ein Hintergrund-Thread des Dienstes das folgende
+Bild der Playlist vor: Es wird geprueft, bei Bedarf verkleinert und als
+`slideshow/www/img/next.jpg` abgelegt. Beim naechsten Wechsel wird diese Datei
+nur noch atomar in `current.jpg` umbenannt, die Wartezeit nach einem Tipp
+verkuerzt sich dadurch.
+
+- Vorgeladen wird immer nur das Bild nach dem aktuellen. Beim Zurueckblaettern
+  und beim Umbruch am Listenende wird das Bild wie bisher direkt erzeugt.
+- Nach einem Rescan, einem Wechsel der Reihenfolge oder wenn das Vorladen
+  fehlschlaegt, faellt der Dienst ebenfalls auf den direkten Weg zurueck.
+  Fehler stehen als `Vorladen fehlgeschlagen fuer ...` im Journal.
+- Angehaltene Diashow: Das naechste Bild wird trotzdem einmal vorbereitet und
+  beim Fortsetzen oder beim naechsten Tipp nach rechts verwendet.
+- `next.jpg` (und die temporaere Datei `next.tmp.jpg`) liegen im selben Ordner
+  wie `current.jpg` und werden nicht committed (siehe `.gitignore`).
+
+## Warnung bei leerer Playlist
+
+Findet ein Scan keine Bilder (typisch: NAS nicht gemountet, Ordner nicht
+lesbar), schreibt der Dienst eine Warnung ins Journal und sendet an das
+Notification-Overlay die Meldung `Diashow: Keine Bilder gefunden (NAS pruefen)`
+(mit Umlaut `prüfen`) auf `display/kueche/cmd/notify`.
+
+- Die Meldung wird hoechstens alle 10 Minuten wiederholt, auch wenn der Dienst
+  weiter erfolglos scannt.
+- Sobald wieder Bilder gefunden werden, hebt der Dienst die Meldung per
+  `display/kueche/cmd/notify/clear` auf (Journal: `Bilder wieder gefunden`).
+  Das blendet auch eine zu diesem Zeitpunkt angezeigte andere Meldung aus.
+- Das Topic laesst sich mit `notify_topic` in der `config.json` aendern; das
+  Aufheben nutzt `<notify_topic>/clear`.
+
+Test (Bilderordner voruebergehend auf einen leeren Ordner setzen):
+
+```bash
+mkdir -p /tmp/leer
+cp ~/kuechendisplay/slideshow/config.json /tmp/config.backup.json
+sed -i 's#"image_root": *"[^"]*"#"image_root": "/tmp/leer"#' ~/kuechendisplay/slideshow/config.json
+sudo systemctl restart kuechendisplay-diashow.service
+
+# danach zuruecksetzen
+cp /tmp/config.backup.json ~/kuechendisplay/slideshow/config.json
+sudo systemctl restart kuechendisplay-diashow.service
+```
 
 ## Diagnose-Modus (?debug=1)
 
 Mit dem Parameter `?debug=1` blendet die Seite unten links einen
-Diagnose-Bereich ein. Die erste Zeile zeigt die aktuelle Position (`Bild 17 /
-252 dateiname.jpg`), darunter stehen die letzten acht Ereignisse mit Uhrzeit
-(`pointerdown`, `pointerup`, `pointercancel`, `touchstart`, `touchend`,
-`click`, `senden prev|next` sowie Fehler beim Senden).
+Diagnose-Bereich ein. Die erste Zeile zeigt die aktuelle Position, den
+Dateinamen und die Reihenfolge (`Bild 17 / 252  dateiname.jpg  [zufall]`), bei
+angehaltener Diashow zusaetzlich `[PAUSE]`. Darunter stehen die letzten acht
+Ereignisse mit Uhrzeit (`pointerdown`, `pointerup`, `pointercancel`,
+`touchstart`, `touchend`, `click`, `senden prev|next|toggle` sowie Fehler beim
+Senden). Der Bereich liegt rechts neben dem Pause-Symbol.
 
 Am Kiosk oeffnen und wieder verlassen:
 
@@ -344,11 +476,12 @@ ab (siehe [`automatik.md`](automatik.md)).
 | Topic | Richtung | Payload | Zweck |
 |---|---|---|---|
 | `display/kueche/diashow/set/intervall` | Eingang | Sekunden, z. B. `15` | Anzeigedauer pro Bild aendern (min. 2s); wird dauerhaft gespeichert |
+| `display/kueche/diashow/set/reihenfolge` | Eingang | `zufall` oder `reihenfolge` | Reihenfolge der Bilder umschalten (zufaellig bzw. sortiert nach Ordner und Dateiname); wird dauerhaft gespeichert |
 | `display/kueche/diashow/set/rescan` | Eingang | beliebig, z. B. `1` | Loest einen Neu-Scan des NAS-Ordners aus |
-| `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow pausieren/fortsetzen |
+| `display/kueche/diashow/set/aktiv` | Eingang | `ON` / `OFF` | Diashow fortsetzen/anhalten |
 | `display/kueche/diashow/set/naechstes` | Eingang | beliebig, z. B. `1` | Zum naechsten Bild blaettern |
 | `display/kueche/diashow/set/vorheriges` | Eingang | beliebig, z. B. `1` | Zum vorherigen Bild blaettern |
-| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":..., "index":..., "datei":...}` | Aktueller Zustand fuer Dashboards/Node-RED. `seq` ist ein Bildzaehler, der bei jedem neuen Bild um 1 steigt (Startwert: Unix-Zeit beim Dienststart). `index` ist die 1-basierte Position des angezeigten Bildes in der aktuellen Reihenfolge (`0` = noch kein Bild, z. B. direkt nach einem Scan), `datei` sein Dateiname. |
+| `display/kueche/diashow/status` (retain) | Ausgang | JSON `{"intervall":..., "reihenfolge":..., "anzahl_bilder":..., "letzter_scan":..., "aktiv":..., "seq":..., "index":..., "datei":...}` | Aktueller Zustand fuer Dashboards/Node-RED. `reihenfolge` ist `zufall` oder `reihenfolge`. `seq` ist ein Bildzaehler, der bei jedem neuen Bild um 1 steigt (Startwert: Unix-Zeit beim Dienststart). `index` ist die 1-basierte Position des angezeigten Bildes in der aktuellen Reihenfolge (`0` = noch kein Bild, z. B. direkt nach einem Scan), `datei` sein Dateiname. |
 
 Zur Abgrenzung: Das Umschalten der **Anzeige** (Button 2, Watchdog) laeuft
 ueber den bestehenden Supervisor-Namensraum `display/kueche/cmd/mode`, nicht
@@ -358,28 +491,33 @@ ausschliesslich Inhalt/Tempo der Diashow selbst, unabhaengig davon, ob sie
 gerade sichtbar ist. Vom Broker wiederholte retained Nachrichten auf den
 `set/...`-Topics werden ignoriert.
 
-Die Reihenfolge der Bilder ist zwischen zwei Scans fest. Neu gemischt wird
-beim Start des Dienstes, nach einem Rescan und wenn die Liste einmal
-durchgelaufen ist; danach beginnt `index` wieder bei 1.
+Die Reihenfolge der Bilder ist zwischen zwei Scans fest. Neu geordnet wird
+beim Start des Dienstes, nach einem Rescan, wenn die Liste einmal
+durchgelaufen ist und beim Umschalten der Reihenfolge; danach beginnt `index`
+bei einem Scan wieder bei 1 (Details in "Reihenfolge: zufaellig oder
+sortiert").
 
-### Intervall bleibt erhalten
+### Intervall und Reihenfolge bleiben erhalten
 
 Jedes per `set/intervall` gesetzte Intervall (z. B. vom Slider im
-Node-RED-Dashboard) speichert der Dienst in
-`~/.kuechendisplay/diashow_state.json`, z. B. `{"intervall": 31.0}`. Beim
-Start des Dienstes hat dieser Wert Vorrang vor `default_interval` aus der
-`config.json`. Dadurch bleibt das Intervall nach einem Neustart des Dienstes
-oder des Pi erhalten.
+Node-RED-Dashboard) und jede per `set/reihenfolge` gesetzte Reihenfolge
+speichert der Dienst in `~/.kuechendisplay/diashow_state.json`, z. B.
+`{"intervall": 31.0, "reihenfolge": "zufall"}`. Beim Start des Dienstes haben
+diese Werte Vorrang vor `default_interval` bzw. `default_order` aus der
+`config.json`. Dadurch bleiben sie nach einem Neustart des Dienstes oder des
+Pi erhalten.
 
 - Ist die Datei nicht vorhanden, defekt oder enthaelt sie einen ungueltigen
-  Wert (unter 2 s oder keine endliche Zahl), gilt `default_interval`; bei
-  einem ungueltigen Inhalt steht eine Meldung im Journal.
-- Der Zustand "pausiert" (`set/aktiv`) wird bewusst **nicht** gespeichert.
-  Nach jedem Start laeuft die Diashow und wechselt automatisch.
+  Wert (Intervall unter 2 s oder keine endliche Zahl, unbekannte
+  Reihenfolge), gelten `default_interval` bzw. `default_order`; bei einem
+  ungueltigen Inhalt steht eine Meldung im Journal.
+- Der Zustand "pausiert" (`set/aktiv`, Tippen in die Mitte) wird bewusst
+  **nicht** gespeichert. Nach jedem Start laeuft die Diashow und wechselt
+  automatisch.
 - Nicht endliche Werte (`inf`, `nan`) lehnt der Dienst ab und schreibt eine
   Warnung ins Journal.
-- Zurueck zum Wert aus der `config.json`: Datei loeschen und den Dienst neu
-  starten.
+- Zurueck zu den Werten aus der `config.json`: Datei loeschen und den Dienst
+  neu starten.
 
 ```bash
 cat ~/.kuechendisplay/diashow_state.json
@@ -395,6 +533,14 @@ mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/rescan' -m 1
 
 # Intervall auf 15s setzen
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/intervall' -m 15
+
+# Sortiert (nach Ordner und Dateiname) bzw. wieder zufaellig
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/reihenfolge' -m reihenfolge
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/reihenfolge' -m zufall
+
+# Diashow anhalten / fortsetzen
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/aktiv' -m OFF
+mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/aktiv' -m ON
 
 # Naechstes bzw. vorheriges Bild
 mosquitto_pub -h mqtt -p 1883 -t 'display/kueche/diashow/set/naechstes' -m 1
@@ -424,7 +570,8 @@ sichtbare Bild nicht abrupt unterbrochen wird.
   `current.jpg` kopiert statt neu kodiert. Das verkuerzt die Wartezeit nach
   einem Tipp. Alle anderen Faelle werden wie zuvor neu kodiert.
 - Die Verkleinerung der Originale geschieht lazy bei der ersten Anzeige des
-  jeweiligen Bildes, nicht vorab fuer alle Bilder.
+  jeweiligen Bildes, nicht vorab fuer alle Bilder. Beim Vorladen laeuft sie
+  fuer das jeweils naechste Bild bereits im Hintergrund.
 
 ## Bekanntes Verhalten / Troubleshooting
 
@@ -438,18 +585,29 @@ sichtbare Bild nicht abrupt unterbrochen wird.
 - **Diashow zeigt nach Reboot ein altes Bild**: pruefen, ob
   `kuechendisplay-diashow.service` tatsaechlich laeuft und der NAS-Mount
   aktiv ist (`findmnt /mnt/diashow`); der Dienst scannt beim Start neu.
+- **Meldung "Diashow: Keine Bilder gefunden (NAS pruefen)"**: Der Scan findet
+  keine Bilder. `findmnt /mnt/diashow` und `ls /mnt/diashow` pruefen, ggf.
+  Mount neu anstossen (`sudo systemctl restart remote-fs.target`) und einen
+  Rescan ausloesen (`set/rescan`). Die Meldung verschwindet von selbst, sobald
+  wieder Bilder gefunden werden.
 - **Diashow startet nicht automatisch**: `display/kueche/status/slideshow/timeout`
   pruefen (`0` = aus) und ob Taster, Touch oder MQTT-Kommandos den Timer
   laufend zuruecksetzen (siehe [`automatik.md`](automatik.md)).
-- **Intervall springt nach einem Neustart auf den Standard (10 s)**: Im
-  Journal des Diashow-Dienstes muss beim Start
-  `Gespeichertes Intervall geladen: ...` stehen
-  (`sudo journalctl -u kuechendisplay-diashow.service -b --no-pager | grep -i intervall`).
+- **Diashow steht still, obwohl kein Fehler im Journal steht**: Moeglicherweise
+  ist sie angehalten (Tippen in die Mitte oder `set/aktiv` = `OFF`). Ein
+  kleines Pause-Symbol unten links zeigt das an; `"aktiv": false` im Status
+  bestaetigt es. Ein weiterer Tipp in die Mitte bzw. `set/aktiv` = `ON`
+  setzt sie fort.
+- **Intervall oder Reihenfolge springen nach einem Neustart auf den Standard**:
+  Im Journal des Diashow-Dienstes muss beim Start
+  `Gespeichertes Intervall geladen: ...` bzw.
+  `Gespeicherte Reihenfolge geladen: ...` stehen
+  (`sudo journalctl -u kuechendisplay-diashow.service -b --no-pager | grep -i gespeichert`).
   Fehlt die Zeile, existiert `~/.kuechendisplay/diashow_state.json` nicht
   oder ist ungueltig (dann steht eine Warnung im Journal). Pruefen, ob die
   Datei dem Benutzer des Dienstes (`christoph`) gehoert und beschreibbar ist
   (`ls -l ~/.kuechendisplay/`); Schreibfehler stehen als
-  `Intervall konnte nicht gespeichert werden` im Journal. Ein Intervall
+  `Einstellungen konnten nicht gespeichert werden` im Journal. Ein Intervall
   unter 2 s oder `inf`/`nan` wird nicht uebernommen.
 - **Tippen reagiert nicht**: Im Journal des Diashow-Dienstes muss
   `Navigations-API laeuft auf http://127.0.0.1:8091` stehen
@@ -457,7 +615,9 @@ sichtbare Bild nicht abrupt unterbrochen wird.
   Steht dort `API-Port ... nicht verfuegbar`, belegt ein anderer Prozess den
   Port (`ss -ltnp | grep 8091`); dann `api_port` in `config.json` und `API` in
   `index.html` anpassen. Mit `curl -X POST http://127.0.0.1:8091/api/next`
-  laesst sich die API ohne Touch pruefen. Bei aktiver Kindersicherung ist der
+  (bzw. `/api/prev`, `/api/toggle`) laesst sich die API ohne Touch pruefen.
+  Die API lauscht nur auf `127.0.0.1`; ueber einen anderen Rechner im Netz
+  funktioniert das Tippen daher nicht. Bei aktiver Kindersicherung ist der
   Touch gesperrt. Ob Beruehrungen die Seite erreichen, zeigt der
   Diagnose-Modus (`?debug=1`).
 - **Nach einem Update zeigt die Diashow noch das alte Verhalten**: Der
