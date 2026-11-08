@@ -11,14 +11,20 @@ ein Ueberschreiben ist also unkritisch).
 
 Manueller Rescan, Anzeigegeschwindigkeit sowie Vor-/Zurueckblaettern sind per
 MQTT steuerbar. Das Frontend (www/index.html) blaettert per Tippen auf die
-linke bzw. rechte Bildschirmseite ueber einen kleinen lokalen HTTP-Endpunkt
-(POST /api/next, /api/prev auf 127.0.0.1:8091, konfigurierbar mit
-api_host/api_port).
+linke bzw. rechte Bildschirmseite und haelt die Diashow per Tippen in die
+Mitte an bzw. setzt sie fort. Dazu nutzt es einen kleinen lokalen
+HTTP-Endpunkt (POST /api/next, /api/prev, /api/toggle auf 127.0.0.1:8091,
+konfigurierbar mit api_host/api_port).
 
 Das per MQTT eingestellte Intervall wird in ~/.kuechendisplay/diashow_state.json
 (konfigurierbar mit state_file) gespeichert und beim naechsten Start wieder
 geladen; es hat Vorrang vor default_interval aus der config.json. Der Zustand
 "pausiert" wird bewusst nicht gespeichert.
+
+Findet ein Scan keine Bilder (z. B. NAS nicht gemountet), meldet der Dienst
+das per MQTT an das Notification-Overlay (notify_topic, Standard
+<Praefix-Basis>/cmd/notify) und hebt die Meldung wieder auf, sobald Bilder
+gefunden werden.
 """
 
 from __future__ import annotations
@@ -45,6 +51,8 @@ log = logging.getLogger("diashow")
 CONFIG_PATH = Path(os.environ.get("DIASHOW_CONFIG", "/home/christoph/kuechendisplay/slideshow/config.json"))
 DEFAULT_STATE_FILE = Path.home() / ".kuechendisplay" / "diashow_state.json"
 MIN_INTERVAL_SECONDS = 2.0
+EMPTY_NOTIFY_INTERVAL_SECONDS = 600
+EMPTY_NOTIFY_TEXT = "Diashow: Keine Bilder gefunden (NAS prüfen)"
 
 EXIF_ORIENTATION_TAG = 0x0112
 
@@ -107,6 +115,14 @@ class DiashowService:
         self.topic_set_next = f"{prefix}/set/naechstes"
         self.topic_set_prev = f"{prefix}/set/vorheriges"
         self.topic_status = f"{prefix}/status"
+
+        # Meldungen am Display (Notification-Overlay): Standard ist der
+        # Supervisor-Namensraum neben dem Diashow-Praefix, z. B.
+        # display/kueche/diashow -> display/kueche/cmd/notify
+        default_notify = (prefix.rsplit("/", 1)[0] + "/cmd/notify") if "/" in prefix else None
+        self.topic_notify = config.get("notify_topic", default_notify)
+        self._empty_warned = False
+        self._last_empty_notify: Optional[float] = None
 
         self.client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
@@ -172,10 +188,18 @@ class DiashowService:
             self.active = payload.upper() not in ("OFF", "0", "FALSE")
             log.info("Diashow aktiv=%s", self.active)
             self._publish_status()
+            self._wake.set()
         elif msg.topic == self.topic_set_next:
             self.navigate(1)
         elif msg.topic == self.topic_set_prev:
             self.navigate(-1)
+
+    def toggle_active(self) -> None:
+        """Haelt die Diashow an bzw. setzt sie fort (Tippen in die Bildmitte)."""
+        self.active = not self.active
+        log.info("Diashow aktiv=%s (Tipp in die Mitte)", self.active)
+        self._publish_status()
+        self._wake.set()
 
     def navigate(self, delta: int) -> None:
         """Blaettert um delta Bilder (positiv = vor, negativ = zurueck).
@@ -213,6 +237,9 @@ class DiashowService:
                 elif self.path == "/api/prev":
                     service.navigate(-1)
                     self._reply(204)
+                elif self.path == "/api/toggle":
+                    service.toggle_active()
+                    self._reply(204)
                 else:
                     self._reply(404)
 
@@ -222,7 +249,7 @@ class DiashowService:
         try:
             server = ThreadingHTTPServer((host, port), Handler)
         except OSError:
-            log.exception("API-Port %s:%s nicht verfuegbar - Blaettern per Tippen deaktiviert", host, port)
+            log.exception("API-Port %s:%s nicht verfuegbar - Bedienung per Tippen deaktiviert", host, port)
             return
         threading.Thread(target=server.serve_forever, daemon=True).start()
         log.info("Navigations-API laeuft auf http://%s:%s", host, port)
@@ -251,11 +278,31 @@ class DiashowService:
         except Exception:
             log.exception("status.json konnte nicht geschrieben werden")
 
+    def _publish_notify(self, text: str) -> None:
+        if not self.topic_notify:
+            return
+        try:
+            self.client.publish(self.topic_notify, text, qos=1)
+        except Exception:
+            log.exception("Meldung konnte nicht gesendet werden")
+
+    def _clear_notify(self) -> None:
+        if not self.topic_notify:
+            return
+        try:
+            self.client.publish(self.topic_notify + "/clear", "", qos=1)
+        except Exception:
+            log.exception("Meldung konnte nicht aufgehoben werden")
+
     def scan_images(self) -> List[Path]:
-        files = [
-            p for p in self.image_root.rglob("*")
-            if p.is_file() and p.suffix.lower() in self.VALID_EXT
-        ]
+        try:
+            files = [
+                p for p in self.image_root.rglob("*")
+                if p.is_file() and p.suffix.lower() in self.VALID_EXT
+            ]
+        except OSError:
+            log.exception("Bilderordner %s nicht lesbar", self.image_root)
+            files = []
         random.shuffle(files)
         log.info("Scan abgeschlossen: %d Bilder gefunden", len(files))
         return files
@@ -267,7 +314,23 @@ class DiashowService:
         self.current_name = None
         self.last_scan = datetime.datetime.now().isoformat(timespec="seconds")
         self.rescan_requested.clear()
+        self._check_empty_playlist()
         self._publish_status()
+
+    def _check_empty_playlist(self) -> None:
+        """Meldet eine leere Playlist am Display und hebt die Meldung wieder auf."""
+        if not self.playlist:
+            now = time.monotonic()
+            if self._last_empty_notify is None or now - self._last_empty_notify >= EMPTY_NOTIFY_INTERVAL_SECONDS:
+                self._last_empty_notify = now
+                log.warning("Keine Bilder gefunden in %s - NAS-Mount pruefen", self.image_root)
+                self._publish_notify(EMPTY_NOTIFY_TEXT)
+            self._empty_warned = True
+        elif self._empty_warned:
+            self._empty_warned = False
+            self._last_empty_notify = None
+            log.info("Bilder wieder gefunden - Meldung wird aufgehoben")
+            self._clear_notify()
 
     def ensure_scaled(self, path: Path) -> None:
         """Prueft Bildgroesse und verkleinert + ueberschreibt bei Bedarf."""
